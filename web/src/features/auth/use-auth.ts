@@ -14,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { authApi } from '@/api/auth';
 import { isApiError } from '@/api/http';
+import { tokenStore } from '@/api/token-store';
 import { canEncrypt, encryptPassword } from './encrypt-password';
 
 /** queryKey 集中定义,避免"这里写 ['me'] 那里写 ['auth','me']"导致缓存对不上。 */
@@ -70,28 +71,33 @@ export const usePermission = (): ((code: string) => boolean) => {
 export const useLogin = () => {
   const queryClient = useQueryClient();
 
-  const attempt = async (input: { username: string; password: string }): Promise<void> => {
+  /** 返回登录响应而不是 void —— 令牌在响应体里,调用方要拿它落盘。 */
+  const attempt = async (input: { username: string; password: string }) => {
     if (!canEncrypt()) {
-      await authApi.login({ username: input.username, password: input.password });
-      return;
+      return authApi.login({ username: input.username, password: input.password });
     }
     const challenge = await authApi.loginChallenge();
     const passwordCipher = await encryptPassword(input.password, challenge);
-    await authApi.login({ username: input.username, passwordCipher });
+    return authApi.login({ username: input.username, passwordCipher });
   };
 
   return useMutation({
     mutationFn: async (input: { username: string; password: string }) => {
+      let result;
       try {
-        await attempt(input);
+        result = await attempt(input);
       } catch (e) {
         // 密钥/nonce 失效:重取挑战再试一次。只重试一次,避免死循环。
         if (isApiError(e) && e.code === 'AUTH_LOGIN_KEY_EXPIRED') {
-          await attempt(input);
+          result = await attempt(input);
         } else {
           throw e;
         }
       }
+
+      // 令牌落盘。必须在 invalidate 之前 —— 否则紧接着的 /auth/me 还没有凭证可带,
+      // 会立刻 401,表现为"登录成功了却马上被踢回登录页"。
+      tokenStore.save(result.token, result.expiresAt);
     },
     onSuccess: async () => {
       // 登录成功后必须重新拉 /auth/me —— 权限信息全靠它
@@ -104,7 +110,17 @@ export const useLogout = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: authApi.logout,
+    mutationFn: async () => {
+      // 先告知服务端(目前它无事可做,保留调用点),失败也不能挡住本地登出 ——
+      // 令牌已经不想要了,网络问题不该让用户卡在登录态里出不去。
+      try {
+        await authApi.logout();
+      } catch {
+        // 忽略
+      }
+      // 真正的登出:把本地令牌删掉。JWT 是自验证的,服务端没有可吊销的东西。
+      tokenStore.clear();
+    },
     onSuccess: () => {
       // 清空**全部**缓存而不只是 me —— 换个账号登录时,
       // 上一个账号的人员列表不能还留在缓存里

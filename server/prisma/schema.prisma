@@ -59,7 +59,6 @@ model User {
   updatedBy String?
 
   roles    UserRole[]
-  sessions Session[]
 
   @@index([status])
   @@map("sys_user")
@@ -116,28 +115,4 @@ model RolePermission {
 
   @@id([roleId, code])
   @@map("sys_role_permission")
-}
-
-/// 会话 —— 不透明 token 的服务端载荷。
-/// 库里只存 token 的 sha256,明文只在签发那一刻存在于 HTTP 响应里。
-model Session {
-  id                String   @id
-  /// sha256(明文 token) 的 hex。唯一索引 = 每请求的查找路径,必须有
-  tokenHash         String   @unique
-  userId            String
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  /// 滑动过期:每次活跃往后推,但不能越过 absoluteExpiresAt
-  expiresAt         DateTime
-  /// 绝对上限:无论多活跃,超过就必须重新登录,防止会话永生
-  absoluteExpiresAt DateTime
-  /// 上次活跃时间。用于节流续期写库(每 5 分钟才写一次)
-  lastSeenAt        DateTime
-  createdAt         DateTime
-  /// 仅用于"我的登录设备"展示,截断到 200 字符
-  userAgent         String?
-  ip                String?
-
-  @@index([userId])
-  @@index([expiresAt])
-  @@map("sys_session")
 }

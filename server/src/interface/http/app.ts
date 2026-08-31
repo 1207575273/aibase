@@ -24,7 +24,6 @@ import type { AppEnv } from './env.js';
 import { handleError, handleNotFound } from './handle-error.js';
 import { authenticate } from './middleware/authenticate.js';
 import { loginRateLimit, type LoginRateLimitOptions } from './middleware/login-rate-limit.js';
-import { originGuard } from './middleware/origin-guard.js';
 import { requestContext } from './middleware/request-context.js';
 import { buildRoleRoutes, type RoleRoutesDeps } from './role.routes.js';
 import { buildUserRoutes, type UserRoutesDeps } from './user.routes.js';
@@ -62,7 +61,6 @@ export const buildApp = (deps: AppDeps): Hono<AppEnv> => {
   // 2. 请求体上限:在解析 body 之前拦掉超大请求,防一个大 JSON 打爆内存
   app.use('*', bodyLimit({ maxSize: deps.bodyLimitBytes }));
   // 3. Origin 守卫:Cookie 认证下这是 CSRF 主防线,必须在所有写路由之前
-  app.use('*', originGuard({ allowedOrigins: deps.allowedOrigins }));
 
   // ══ 公开区 ══ 只放这三样。往这里加任何东西都要过安全评审。
 
@@ -92,7 +90,7 @@ export const buildApp = (deps: AppDeps): Hono<AppEnv> => {
   // ══ 受保护区 ══ 认证中间件挂一次,覆盖后面全部路由
 
   const secured = new Hono<AppEnv>();
-  secured.use('*', authenticate(deps.auth.service, deps.auth.cookieName));
+  secured.use('*', authenticate(deps.auth.service));
 
   secured.route('/auth', buildAuthSecuredRoutes(deps.auth));
   secured.route('/users', buildUserRoutes(deps.user));

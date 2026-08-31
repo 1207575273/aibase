@@ -111,11 +111,18 @@ R4 禁裸读 `process.env` / R5 前端业务层禁 import axios。
 ### 安全
 
 - `hash`/`verify` 只能出现在登录、改密、建号三条路径,**禁止进循环**(单次占 64MiB)
-- `origin-guard` 是 CSRF 主防线,**不可移除**
-- Cookie 的 `Secure` **按请求实际协议判断**(`request-proto.ts`),不按 `NODE_ENV`。
-  内网部署 `NODE_ENV=production` + 明文 HTTP 是常态,按环境判断会给明文连接发
-  带 Secure 的 Cookie,浏览器静默丢弃 -> "登录 200 紧接着 401"死循环。
-  要显式钉死用 `COOKIE_SECURE=always|never`
+- **登录态用 JWT + `Authorization` 头,不用 Cookie**。凭证由前端显式携带,
+  所以没有 CSRF(无需 origin 白名单)、不受 Secure/SameSite/Path 管辖 ——
+  换 IP、换域名、明文 HTTP 都能直接用。**不要为了"顺手"加回 Cookie**,
+  那会把这一整类部署期问题带回来(e2e 有反向断言守着)
+- **三条固有代价,不是 bug**:改权限要等令牌过期才生效、登出与禁用踢不掉已发出的令牌、
+  令牌存 localStorage 被 XSS 可读。要缩短前两条的窗口只能调短 `JWT_TTL_SECONDS`;
+  要彻底解决只能换回会话查库。详见 `domain/auth/token-signer.ts` 头注释
+- JWT 用 `node:crypto` 手写 HS256(安全相关零第三方依赖)。两处**绝不能动**:
+  必须校验 `alg` 头(防 `alg:none` 绕过)、签名必须 `timingSafeEqual` 比较。
+  `hs256-token-signer.test.ts` 有 10 条攻击面用例守着
+- `JWT_SECRET` 生产必须显式设置(不设直接拒绝启动)。换掉它 = 强制全员下线,
+  这也是唯一的全局吊销手段
 - 用户不存在与密码错误必须返回**同一个码、同一句文案、相近耗时**
 - 密码不以明文进请求体(RSA+AES 混合 + 一次性 nonce)。
   **这不能替代 HTTPS** —— 它解决的是密码进 DevTools / nginx 日志 / APM 抓包,
@@ -130,7 +137,8 @@ R4 禁裸读 `process.env` / R5 前端业务层禁 import axios。
   e2e 端口撞开发端口)。临时换端口用 `PORT=8080 pnpm dev`,不改文件
 - 路径**不要用 `import.meta.url` 数层级**(源码与 dist 层数不同,会只炸生产),
   也不要赌 cwd —— 用 `config.REPO_ROOT`
-- **contextPath 默认空**。设成 `/myapp` 后 API/页面/Cookie Path 一处生效。
+- **contextPath 默认空**,一般用不到,留给"一台 nginx 按路径反代多个应用"的场景。
+  设成 `/myapp` 后 API 与页面前缀一处生效。
   前端**禁止硬编码路径前缀**,用 `import.meta.env.BASE_URL`;
   后端用 `config.contextPrefix / contextBase / apiPrefix`。
   归一化逻辑有**两份实现**(后端 config 的 TS、`scripts/ports.mjs` 的 JS ——
@@ -254,7 +262,12 @@ lint 报 R3 越界 -> domain 里 import 了契约包,枚举在 domain 重写一�
 
 **[判断]** 是工程结论,**[偏好]** 可按项目改。
 
-- **[判断]** 不用 JWT(单进程 SQLite 下无状态优势为零,却做不到强制下线与权限即时生效)
+- **[判断]** 用 JWT 而不是会话查库。原本的判断是"不用 JWT",理由是无状态优势为零
+  且做不到强制下线 —— 那个判断在**技术上仍然成立**,但它衡量错了成本:
+  真正的代价不在服务端,而在 Cookie 带来的一长串部署期问题
+  (Secure 标志、CSRF 白名单、Path 跟随 contextPath),表现全是"某某环境登不上",
+  每一个都难定位。改用 JWT + header 后这些一次性消失,代价是明确且可接受的三条
+  (见第三节「安全」)
 - **[判断]** 不建 Permission 表 / 不做通配符权限码 / 不做用户直授权限
 - **[判断]** 不建菜单表、不做动态路由下发(前端路由是编译期产物,必然漂移)
 - **[判断]** 不做 SQL 表达式驱动的动态数据权限 / 不做多租户 / 不引 DI 容器
@@ -296,7 +309,9 @@ lint 报 R3 越界 -> domain 里 import 了契约包,枚举在 domain 重写一�
 18. **表单「点保存没反应」且无任何提示** -> 拿 strictObject 请求体 schema 当表单 resolver,
     多余字段被判 `unrecognized_keys` 且 path 为根,落不到输入框
     -> 表单单独定义 schema + `onFormInvalid` 兜底
-19. **内网 HTTP 部署登录 200 却紧接着 401,反复跳登录页** -> Cookie 的 Secure 按
+19. **[已根治]** 登录态改用 JWT + header 之后,下面这个坑连同整类 Cookie 问题
+    (换 IP 被 origin-guard 拒、Secure 标志静默丢弃)都不再存在。留作记录:
+    **内网 HTTP 部署登录 200 却紧接着 401,反复跳登录页** -> Cookie 的 Secure 按
     `NODE_ENV` 判断,而内网生产就是明文 HTTP,浏览器**静默丢弃**带 Secure 的 Cookie
     (不报错不警告,看起来像认证坏了)-> 改按请求实际协议判断(含 `X-Forwarded-Proto`),
     见 `request-proto.ts`

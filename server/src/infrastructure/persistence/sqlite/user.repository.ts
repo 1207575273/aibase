@@ -9,6 +9,7 @@ import type {
   UserWithRoles,
 } from '../../../domain/auth/user.repository.js';
 import type { User, UserStatus } from '../../../domain/auth/auth.types.js';
+import type { DataScope, RoleGrant } from '../../../domain/auth/actor.js';
 import { AUTH_ERROR } from '../../../domain/auth/auth.errors.js';
 import { conflict } from '../../../domain/shared/app-error.js';
 import { mapPrismaError } from './prisma-error.js';
@@ -58,6 +59,22 @@ export class PrismaUserRepository implements UserRepository {
   async findByUsername(username: string): Promise<User | null> {
     const row = await this.db.user.findUnique({ where: { username } });
     return row === null ? null : toEntity(row);
+  }
+
+  async findRoleGrants(userId: string): Promise<RoleGrant[]> {
+    // 单次查询带出 role + permissions 两层。登录时走一次,不在热路径上,
+    // 但仍然不拆成先查角色再逐个查权限 —— 那是 N+1。
+    const rows = await this.db.userRole.findMany({
+      where: { userId },
+      include: { role: { include: { permissions: { select: { code: true } } } } },
+    });
+
+    return rows.map((r) => ({
+      code: r.role.code,
+      superAdmin: r.role.superAdmin,
+      dataScope: r.role.dataScope as DataScope,
+      permissions: r.role.permissions.map((p) => p.code),
+    }));
   }
 
   async findWithRoles(id: string): Promise<UserWithRoles | null> {

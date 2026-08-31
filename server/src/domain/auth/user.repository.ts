@@ -9,6 +9,7 @@
  */
 
 import type { Page, PageParams } from '../shared/page.js';
+import type { RoleGrant } from './actor.js';
 import type { User, UserStatus } from './auth.types.js';
 
 /** 用户及其角色。列表与详情都要展示角色,所以做成一个带关联的读取形状。 */
@@ -39,6 +40,14 @@ export interface UserRepository {
 
   /** 带角色的详情。未命中返回 null。 */
   findWithRoles(id: string): Promise<UserWithRoles | null>;
+
+  /**
+   * 取用户身上的角色授权,用于登录时把权限固化进 JWT 载荷。
+   *
+   * 与 findWithRoles 的区别:那个给列表页展示用(只要 id/code/name),
+   * 这个要带 superAdmin / dataScope / permissions 三样鉴权数据。
+   */
+  findRoleGrants(userId: string): Promise<RoleGrant[]>;
 
   /**
    * 分页列表,按 createdAt 倒序(新建的排前面)。

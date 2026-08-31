@@ -29,7 +29,6 @@
  */
 
 import type { RoleRepository } from '../auth/role.repository.js';
-import type { SessionRepository } from '../auth/session.repository.js';
 import type { UserRepository } from '../auth/user.repository.js';
 
 /**
@@ -41,7 +40,6 @@ import type { UserRepository } from '../auth/user.repository.js';
 export interface RepoBundle {
   user: UserRepository;
   role: RoleRepository;
-  session: SessionRepository;
 }
 
 export interface UnitOfWork {

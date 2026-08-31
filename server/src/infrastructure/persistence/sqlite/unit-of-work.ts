@@ -15,7 +15,6 @@ import type { RepoBundle, UnitOfWork } from '../../../domain/shared/unit-of-work
 import type { DbClient } from './db-client.js';
 import type { PrismaClient } from './prisma.js';
 import { PrismaRoleRepository } from './role.repository.js';
-import { PrismaSessionRepository } from './session.repository.js';
 import { PrismaUserRepository } from './user.repository.js';
 
 /**
@@ -27,7 +26,6 @@ import { PrismaUserRepository } from './user.repository.js';
 export const buildRepos = (db: DbClient): RepoBundle => ({
   user: new PrismaUserRepository(db),
   role: new PrismaRoleRepository(db),
-  session: new PrismaSessionRepository(db),
 });
 
 export class PrismaUnitOfWork implements UnitOfWork {

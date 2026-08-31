@@ -7,12 +7,12 @@
  *   实锤后果:同一个端口在 ports.json 写 42421、main.ts 默认值 42421、
  *   .env 与 .env.example 写 41421、origin-guard 兜底 42421 —— 四处记载三个值。
  * - 配置错误必须在**启动时**炸,而不是等到某个冷门代码路径第一次执行才发现。
- *   比如 SESSION_ABSOLUTE_DAYS 写成 'abc',不校验的话 Number('abc') = NaN,
  *   会静默产生一个 Invalid Date 的过期时间,所有会话立刻失效且没人知道为什么。
  *
  * eslint R4 规则禁止其他文件裸读 process.env,强制走这里。
  */
 
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -139,29 +139,27 @@ const ConfigSchema = z.object({
    */
   logMaxFileSize: z.string().default('50m'),
 
-  /** 会话滑动窗口:每次活跃把过期时间推到 now + 这么多天。 */
-  sessionSlidingDays: z.coerce.number().int().min(1).max(365).default(7),
   /**
-   * 会话绝对上限:从登录时刻算起,超过就必须重新登录,滑动永远不能越过它。
-   * 没有这个的话,一个天天用的账号会话可以永生 —— 一次 token 泄漏就是永久失陷。
+   * JWT 签名密钥。至少 32 字节,不够长启动直接崩(见 hs256-token-signer.ts)。
+   *
+   * [重要] 换掉它会让**所有已签发的令牌立即失效**,全员重新登录 ——
+   * 这也是唯一的"强制全员下线"手段:JWT 是自验证的,无法单独吊销某一个令牌。
+   *
+   * 不设时开发态自动生成随机密钥并打警告(进程一重启大家就得重登,只适合本机开发);
+   * 生产不设则**拒绝启动** —— 多实例部署时各实例密钥不同,登录到 A 的令牌在 B 上
+   * 验不过,表现为"随机掉登录",极难定位。
    */
-  sessionAbsoluteDays: z.coerce.number().int().min(1).max(365).default(30),
-  sessionCookieName: z.string().min(1).default('app_session'),
+  jwtSecret: z.string().optional(),
 
   /**
-   * 会话 Cookie 的 Secure 标志策略。
+   * 令牌有效期(秒)。默认 7 天。
    *
-   * `auto`(默认)按**每个请求的实际协议**判断 —— HTTP 不加、HTTPS 加、
-   * 反代终止 TLS 时读 X-Forwarded-Proto。一次配置都不用改就适应所有部署形态。
-   *
-   * 为什么默认不是"生产就加": 内网部署 `NODE_ENV=production` + 明文 HTTP
-   * 是常态,那样会给明文连接发带 Secure 的 Cookie,浏览器**静默丢弃**,
-   * 表现为"登录 200 紧接着 401",完全无法登录且极难定位。
-   *
-   * `always`: 确定在 HTTPS 后面但代理没转发 X-Forwarded-Proto 时用。
-   * `never`: 仅用于排查,别带上生产。
+   * 它同时决定两件事,调它就是在两者之间取舍:
+   *   - 用户多久要重新登录一次
+   *   - 改权限 / 禁用账号后多久真正生效 —— 权限固化在令牌载荷里,要等过期才刷新
+   * 要权限变更更快生效就调短,代价是登录更频繁。
    */
-  cookieSecure: z.enum(['auto', 'always', 'never']).default('auto'),
+  jwtTtlSeconds: z.coerce.number().int().min(60).default(7 * 24 * 60 * 60),
 
   /**
    * 是否强制密码加密传输。
@@ -218,6 +216,8 @@ export type AppConfig = z.output<typeof ConfigSchema> & {
   /** 数据库文件的绝对路径,由 databaseUrl 解析而来。 */
   dbPath: string;
   webPort: number;
+  /** 已解析的 JWT 密钥。未配置时是进程内随机生成的(仅开发态)。 */
+  jwtSecret: string;
   /** 归一化后的上下文根:'' 或 '/app'(前有斜杠、后无斜杠)。拼路径用。 */
   contextPrefix: string;
   /** 归一化后的基路径:'/' 或 '/app/'(带尾斜杠)。浏览器可点地址用。 */
@@ -237,10 +237,8 @@ const buildConfig = (): AppConfig => {
     logFile: process.env['LOG_FILE'],
     logRetainFiles: process.env['LOG_RETAIN_FILES'],
     logMaxFileSize: process.env['LOG_MAX_FILE_SIZE'],
-    sessionSlidingDays: process.env['SESSION_SLIDING_DAYS'],
-    sessionAbsoluteDays: process.env['SESSION_ABSOLUTE_DAYS'],
-    sessionCookieName: process.env['SESSION_COOKIE_NAME'],
-    cookieSecure: process.env['COOKIE_SECURE'],
+    jwtSecret: process.env['JWT_SECRET'],
+    jwtTtlSeconds: process.env['JWT_TTL_SECONDS'],
     requireEncryptedPassword: process.env['AUTH_REQUIRE_ENCRYPTED_PASSWORD'],
     bodyLimitBytes: process.env['BODY_LIMIT_BYTES'],
     loginRateLimit: process.env['LOGIN_RATE_LIMIT'],
@@ -261,15 +259,6 @@ const buildConfig = (): AppConfig => {
 
   const value = parsed.data;
 
-  // 交叉校验:滑动窗口比绝对上限还长是配置错误 —— 那样滑动就永远碰不到上限,
-  // 绝对上限形同虚设。zod 的 superRefine 也能做,但这里放在外面读起来更直白。
-  if (value.sessionSlidingDays > value.sessionAbsoluteDays) {
-    process.stderr.write(
-      `[FATAL] SESSION_SLIDING_DAYS(${value.sessionSlidingDays}) 不能大于 ` +
-        `SESSION_ABSOLUTE_DAYS(${value.sessionAbsoluteDays})\n`,
-    );
-    process.exit(1);
-  }
 
   const rawPath = value.databaseUrl.startsWith('file:')
     ? value.databaseUrl.slice('file:'.length)
@@ -308,8 +297,33 @@ const buildConfig = (): AppConfig => {
   // 环境变量优先于 ports.json —— 容器里没有 ports.json,只能靠 CONTEXT_PATH 注入
   const contextPrefix = normalizeContextPath(value.contextPath);
 
+  /*
+   * JWT 密钥兜底。
+   *
+   * 开发态没设就随机生成 —— 直接崩会让 `pnpm dev` 开箱即用失效,新人第一次跑就撞墙。
+   * 代价是进程重启密钥就变、已签发的令牌全部失效,所以要打一行醒目警告。
+   *
+   * 生产态则**拒绝启动**:多实例各自随机会导致「登录到 A 的令牌在 B 上验不过」,
+   * 表现为随机掉登录,是最难查的一类问题。
+   */
+  const rawSecret = value.jwtSecret ?? '';
+  if (rawSecret === '') {
+    if (isProduction) {
+      process.stderr.write(
+        '[FATAL] 生产环境必须设置 JWT_SECRET(至少 32 字节)。\n' +
+          '        生成一个: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64url\'))"\n',
+      );
+      process.exit(1);
+    }
+    process.stderr.write(
+      '[WARN] 未设置 JWT_SECRET,已生成临时密钥 —— 进程重启后所有人需要重新登录。\n' +
+        '       正式使用请写进 .env。\n',
+    );
+  }
+
   return {
     ...value,
+    jwtSecret: rawSecret === '' ? randomBytes(48).toString('base64url') : rawSecret,
     allowedOrigins: [...new Set([...value.allowedOrigins, ...devOrigins])],
     isProduction,
     isTest: value.nodeEnv === 'test',

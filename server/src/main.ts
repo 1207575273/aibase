@@ -18,7 +18,7 @@ import { registerShutdown } from './bootstrap/shutdown.js';
 import { config, REPO_ROOT } from './config/index.js';
 import { accessUrls } from './infrastructure/system/access-urls.js';
 import { createContext } from './composition/context.js';
-import { buildModules, startSessionCleanup } from './composition/modules.js';
+import { buildModules } from './composition/modules.js';
 import { buildApp } from './interface/http/app.js';
 import type { AppEnv } from './interface/http/env.js';
 
@@ -43,7 +43,6 @@ const bootstrap = async (): Promise<void> => {
     startedAt,
   });
 
-  const stopCleanup = startSessionCleanup(ctx);
 
   // 挂载。两种维度组合:
   //   - contextPath: '' 挂根 / '/app' 整体挂子路径(见 ports.json)
@@ -96,7 +95,6 @@ const bootstrap = async (): Promise<void> => {
         server.close((err) => (err !== undefined && err !== null ? rejectClose(err) : resolveClose()));
       }),
     cleanup: async () => {
-      stopCleanup();
       await ctx.prisma.$disconnect();
       // 最后才关日志 —— 上面几步真出错了,那条 error 也得写进去
       await ctx.closeLogger();

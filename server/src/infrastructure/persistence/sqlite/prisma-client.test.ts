@@ -44,8 +44,11 @@ describe('createPrismaClient PRAGMA', () => {
     expect(Number(rows[0]?.timeout)).toBe(5000);
   });
 
-  it('should_cascade_delete_sessions_when_user_removed', async () => {
-    // 端到端验证外键真的在工作,而不只是 PRAGMA 值对
+  it('should_cascade_delete_user_roles_when_user_removed', async () => {
+    // 端到端验证外键真的在工作,而不只是 PRAGMA 值对。
+    // 用 user -> userRole 这条关系:Session 表已随 JWT 改造删除,
+    // 而级联删除本身仍然是必须被守住的行为 —— 它错了会留下悬空引用,
+    // 且 SQLite 在外键关闭时**不会报错**,只会静默留下脏数据。
     const now = new Date();
     await db.prisma.user.create({
       data: {
@@ -58,22 +61,27 @@ describe('createPrismaClient PRAGMA', () => {
         updatedAt: now,
       },
     });
-    await db.prisma.session.create({
+    await db.prisma.role.create({
       data: {
-        id: 's1',
-        tokenHash: 'h1',
-        userId: 'u1',
-        expiresAt: now,
-        absoluteExpiresAt: now,
-        lastSeenAt: now,
+        id: 'r1',
+        code: 'TESTER',
+        name: '测试角色',
+        dataScope: 'SELF',
+        superAdmin: false,
+        builtin: false,
         createdAt: now,
+        updatedAt: now,
       },
     });
+    await db.prisma.userRole.create({ data: { userId: 'u1', roleId: 'r1' } });
 
     await db.prisma.user.delete({ where: { id: 'u1' } });
 
-    expect(await db.prisma.session.count()).toBe(0);
+    expect(await db.prisma.userRole.count()).toBe(0);
+    // 角色本身不该被连带删掉 —— 级联只沿 user 这一侧
+    expect(await db.prisma.role.count()).toBe(1);
   });
+
 
 });
 

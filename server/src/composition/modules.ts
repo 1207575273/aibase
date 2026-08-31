@@ -21,7 +21,7 @@ import { UserService } from '../application/user/user.service.js';
 import { config } from '../config/index.js';
 import { buildRepos } from '../infrastructure/persistence/sqlite/unit-of-work.js';
 import { ScryptPasswordHasher } from '../infrastructure/security/scrypt-password-hasher.js';
-import { CryptoTokenGenerator } from '../infrastructure/security/crypto-token-generator.js';
+import { Hs256TokenSigner } from '../infrastructure/security/hs256-token-signer.js';
 import { RsaLoginCrypto } from '../infrastructure/security/rsa-login-crypto.js';
 import type { AppDeps } from '../interface/http/app.js';
 import type { AppContext } from './context.js';
@@ -36,25 +36,28 @@ export const buildModules = async (
 ): Promise<Omit<AppDeps, 'version' | 'startedAt'>> => {
   const repos = buildRepos(ctx.prisma);
   const hasher = new ScryptPasswordHasher();
-  const tokens = new CryptoTokenGenerator();
-
+  
   // RSA 密钥在进程内存里生成,不落盘 —— 没有密钥文件可泄漏,且天然随重启轮换。
   // 生成是异步的,所以 buildModules 是 async。
   const loginCrypto = new RsaLoginCrypto({ clock: ctx.clock });
   await loginCrypto.init();
 
+  // JWT 签发器。密钥与有效期都来自 config,时钟注入 —— 测试要能把"现在"固定住。
+  const signer = new Hs256TokenSigner({
+    secret: config.jwtSecret,
+    ttlSeconds: config.jwtTtlSeconds,
+    now: ctx.clock,
+  });
+
   const authService = new AuthService({
     userRepo: repos.user,
-    sessionRepo: repos.session,
     hasher,
-    tokens,
+    signer,
     loginCrypto,
     requireEncryptedPassword: config.requireEncryptedPassword,
     ids: ctx.ids,
     clock: ctx.clock,
     logger: ctx.logger.child({ module: 'auth' }),
-    slidingDays: config.sessionSlidingDays,
-    absoluteDays: config.sessionAbsoluteDays,
   });
 
   const userService = new UserService({
@@ -79,12 +82,6 @@ export const buildModules = async (
   return {
     auth: {
       service: authService,
-      cookieName: config.sessionCookieName,
-      // 按请求实际协议判断,不按 NODE_ENV —— 内网 HTTP 部署时后者会给明文连接
-      // 发带 Secure 的 Cookie,浏览器静默丢弃,表现为登录 200 后立刻 401
-      secureCookie: config.cookieSecure,
-      // Cookie 作用域跟随上下文根,避免同域多应用之间互相看到 / 互相挤下线
-      cookiePath: config.contextBase,
     },
     user: { service: userService },
     role: { service: roleService },
@@ -109,25 +106,4 @@ export const buildModules = async (
     },
     clock: ctx.clock,
   };
-};
-
-/** 会话清理任务:定期删掉过期会话,防止 sys_session 无限增长。 */
-export const startSessionCleanup = (ctx: AppContext): (() => void) => {
-  const repos = buildRepos(ctx.prisma);
-
-  const sweep = (): void => {
-    void repos.session
-      .deleteExpired(ctx.clock())
-      .then((count) => {
-        if (count > 0) ctx.logger.info('清理过期会话', { count });
-      })
-      .catch((e: unknown) => ctx.logger.error('清理过期会话失败', { err: e }));
-  };
-
-  sweep(); // 启动时先跑一次
-  const timer = setInterval(sweep, 60 * 60 * 1000);
-  // unref: 这个定时器不应该阻止进程退出
-  timer.unref();
-
-  return () => clearInterval(timer);
 };

@@ -17,34 +17,14 @@ import {
   type PermissionCatalogResponse,
 } from '@app/contracts';
 import { Hono } from 'hono';
-import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { AuthService } from '../../application/auth/auth.service.js';
 import { unauthenticated } from '../../domain/shared/app-error.js';
-import { getActor, getSessionId, type AppEnv } from './env.js';
+import { getActor, type AppEnv } from './env.js';
 import { toMeWire, toPermissionCatalogWire } from './wire.js';
 import { validate } from './validator.js';
-import { resolveCookieSecure, type CookieSecureMode } from './request-proto.js';
 
 export interface AuthRoutesDeps {
   service: AuthService;
-  cookieName: string;
-  /**
-   * Cookie Secure 标志的取值策略。
-   *
-   * `'auto'`(默认)按**请求的实际协议**判断,而不是按 NODE_ENV ——
-   * 内网 HTTP 部署时 NODE_ENV 同样是 production,按环境判断会给明文连接
-   * 发带 Secure 的 Cookie,浏览器静默丢弃,表现为"登录 200 但立刻 401"。
-   * 详见 request-proto.ts。
-   */
-  secureCookie: CookieSecureMode;
-  /**
-   * Cookie 的 Path。取应用的上下文基路径('/' 或 '/app/')。
-   *
-   * 为什么不写死 '/': 同一个域名下按路径反代多个应用时,Path=/ 会让
-   * 本应用的会话 Cookie 被发送给**同域的其他应用** —— 既是信息泄漏,
-   * 也会造成多个应用的同名 Cookie 互相覆盖(登了 A 就把 B 挤下线)。
-   */
-  cookiePath: string;
 }
 
 export const buildAuthPublicRoutes = (deps: AuthRoutesDeps): Hono<AppEnv> => {
@@ -61,22 +41,14 @@ export const buildAuthPublicRoutes = (deps: AuthRoutesDeps): Hono<AppEnv> => {
       ip: c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? c.req.header('x-real-ip'),
     });
 
-    setCookie(c, deps.cookieName, result.token, {
-      // HttpOnly: JS 读不到,XSS 拿不走 token。这是选 Cookie 而非 localStorage
-      // 的唯一理由,也是足够的理由。
-      httpOnly: true,
-      // Lax 而非 Strict: Strict 会让"从邮件链接点进系统"的首次导航不带 Cookie,
-      // 用户会被莫名其妙踢到登录页。Lax 已经挡住了所有跨站 POST。
-      sameSite: 'Lax',
-      secure: resolveCookieSecure(deps.secureCookie, c),
-      // 跟随 contextPath,不写死 —— 见 cookiePath 的说明
-      path: deps.cookiePath,
-      expires: result.expiresAt,
-    });
-
-    // body 里也返回 token,但**仅供非浏览器客户端**(curl 脚本、运维工具)。
-    // 前端一律依赖 Cookie,禁止把它存进 localStorage —— 存了就等于
-    // 主动放弃 HttpOnly 提供的 XSS 防护。
+    /*
+     * 令牌只在响应体里返回,不种 Cookie。
+     *
+     * 前端把它存进 localStorage 并在后续请求放进 Authorization 头。
+     * 这么做失去了 HttpOnly 的 XSS 防护,换来的是「凭证不被浏览器自动携带」——
+     * 于是 CSRF、Secure 标志、SameSite、Cookie Path 这一整类部署期问题全部消失,
+     * 换 IP / 换域名 / 明文 HTTP 都能直接用。取舍见 domain/auth/token-signer.ts。
+     */
     const body: LoginResponse = {
       token: result.token,
       expiresAt: result.expiresAt.toISOString(),
@@ -102,15 +74,16 @@ export const buildAuthPublicRoutes = (deps: AuthRoutesDeps): Hono<AppEnv> => {
 export const buildAuthSecuredRoutes = (deps: AuthRoutesDeps): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
+  /**
+   * 登出。
+   *
+   * [注意] 服务端在 JWT 方案下**没有可清理的状态** —— 令牌是自验证的,签出去就收不回。
+   * 真正的登出发生在前端:把 localStorage 里的令牌删掉。
+   * 这个端点保留是为了给前端一个统一调用点(将来加登出审计有地方挂)。
+   */
   app.post('/logout', async (c) => {
-    const token = getCookie(c, deps.cookieName) ?? bearerOf(c.req.header('authorization'));
+    const token = bearerOf(c.req.header('authorization'));
     if (token !== undefined) await deps.service.logout(token);
-
-    // 删除时要带上与写入时一致的属性,否则浏览器可能匹配不到那个 Cookie
-    deleteCookie(c, deps.cookieName, {
-      path: deps.cookiePath,
-      secure: resolveCookieSecure(deps.secureCookie, c),
-    });
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
@@ -129,7 +102,7 @@ export const buildAuthSecuredRoutes = (deps: AuthRoutesDeps): Hono<AppEnv> => {
   });
 
   app.post('/change-password', validate('json', ChangePasswordBodySchema), async (c) => {
-    await deps.service.changePassword(c.req.valid('json'), getActor(c), getSessionId(c));
+    await deps.service.changePassword(c.req.valid('json'), getActor(c));
     const body: OkResponse = { ok: true };
     return c.json(body);
   });

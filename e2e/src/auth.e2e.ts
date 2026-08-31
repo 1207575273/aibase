@@ -43,55 +43,66 @@ describe('认证链路', () => {
     expect(res.body.code).toBe('AUTH_INVALID_CREDENTIALS');
   });
 
-  it('should_set_httponly_cookie_on_login', async () => {
+  it('should_not_set_any_cookie_on_login', async () => {
+    // 登录态完全不走 Cookie 了。这条断言是**反向护栏**:
+    // 哪天有人为了"顺手"又加回 setCookie,CSRF、Secure 标志、SameSite、Path
+    // 那一整类部署期问题会跟着回来,而它们的症状全是"某某环境登不上",极难定位。
     const { setCookie } = await login(E2E_ADMIN.username, E2E_ADMIN.password);
-
-    expect(setCookie).toBeTruthy();
-    const cookie = setCookie ?? '';
-    // HttpOnly 是选 Cookie 而非 localStorage 的唯一理由 —— 丢了它整个取舍就不成立
-    expect(cookie).toContain('HttpOnly');
-    // Lax 而非 Strict:Strict 会让从外部链接进入的首次导航不带 Cookie
-    expect(cookie).toMatch(/SameSite=Lax/i);
-    expect(cookie).toContain('Path=/');
+    expect(setCookie).toBeNull();
   });
 
   it('should_authenticate_via_bearer_token', async () => {
+    // 浏览器与 curl 走的是同一条通道 —— 令牌显式放进 Authorization 头
+    const { token } = await login(E2E_ADMIN.username, E2E_ADMIN.password);
+
+    const res = await api.get<MeBody>('/auth/me', { token });
+    expect(res.status).toBe(200);
+    expect(res.body.user.username).toBe(E2E_ADMIN.username);
+  });
+
+  it('should_return_jwt_shaped_token', async () => {
+    // JWT 是三段 base64url。形状错了说明签发路径被换掉了
+    const { token } = await login(E2E_ADMIN.username, E2E_ADMIN.password);
+    expect(token.split('.')).toHaveLength(3);
+  });
+
+  it('should_expose_token_expiry_header', async () => {
+    // 前端靠这个头提前引导重新登录,而不是等某个请求突然 401 打断用户
     const { token } = await login(E2E_ADMIN.username, E2E_ADMIN.password);
     const res = await api.get<MeBody>('/auth/me', { token });
 
-    expect(res.status).toBe(200);
-    expect(res.body.user.username).toBe(E2E_ADMIN.username);
-    expect(res.body.superAdmin).toBe(true);
+    const exp = res.headers.get('x-token-expires-at');
+    expect(exp).toBeTruthy();
+    expect(Number.isNaN(new Date(exp ?? '').getTime())).toBe(false);
   });
 
-  it('should_authenticate_via_cookie', async () => {
-    // 浏览器用的是这条通道,必须单独验 —— 只测 Bearer 会漏掉 Cookie 解析的问题
-    const { setCookie } = await login(E2E_ADMIN.username, E2E_ADMIN.password);
-    const cookieHeader = (setCookie ?? '').split(';')[0] ?? '';
-
-    const res = await api.get<MeBody>('/auth/me', { cookie: cookieHeader });
-    expect(res.status).toBe(200);
-    expect(res.body.user.username).toBe(E2E_ADMIN.username);
-  });
-
-  it('should_invalidate_token_after_logout', async () => {
+  it('should_keep_token_valid_after_logout', async () => {
+    /*
+     * [有意如此] 登出**不会**让令牌失效。
+     *
+     * JWT 是自验证的,服务端没有可吊销的对象。真正的登出发生在前端:
+     * 把本地存的令牌删掉。这条用例把这个事实钉死 —— 它不是 bug,
+     * 而是选 JWT 时一并选下的代价(见 domain/auth/token-signer.ts)。
+     *
+     * 哪天这条变红了,说明有人加了服务端吊销机制。那本身可能是对的改动,
+     * 但要意识到:每请求查一次吊销表,就等于绕回了会话方案。
+     */
     const { token } = await login(E2E_ADMIN.username, E2E_ADMIN.password);
 
-    expect((await api.get('/auth/me', { token })).status).toBe(200);
-    expect((await api.post('/auth/logout', {}, { token })).status).toBe(200);
+    const out = await api.post('/auth/logout', {}, { token });
+    expect(out.status).toBe(200);
 
-    // 登出必须真的让 token 失效(库里那行被删掉),不是只在客户端擦掉 Cookie
-    const after = await api.get<ErrorBody>('/auth/me', { token });
-    expect(after.status).toBe(401);
+    const after = await api.get<MeBody>('/auth/me', { token });
+    expect(after.status).toBe(200);
   });
 
   it('should_be_idempotent_on_repeated_logout', async () => {
     const { token } = await login(E2E_ADMIN.username, E2E_ADMIN.password);
-    await api.post('/auth/logout', {}, { token });
 
-    // 第二次登出:token 已失效,会被认证中间件拦成 401 —— 这是预期行为,不是错误
-    const second = await api.post<ErrorBody>('/auth/logout', {}, { token });
-    expect(second.status).toBe(401);
+    for (let i = 0; i < 3; i += 1) {
+      const res = await api.post('/auth/logout', {}, { token });
+      expect(res.status).toBe(200);
+    }
   });
 
   it('should_include_traceid_in_every_error_response', async () => {
@@ -150,7 +161,7 @@ describe('认证链路', () => {
       });
 
       expect(res.status).toBe(200);
-      expect(res.body.token).toMatch(/^sess_/);
+      expect(res.body.token.split('.')).toHaveLength(3);
     });
 
     it('should_reject_replayed_cipher', async () => {

@@ -1,41 +1,42 @@
 /**
- * 认证中间件 —— 解析 token,把主体放进 Context。
+ * 认证中间件 —— 从 `Authorization` 头取令牌,验签后把主体放进上下文。
  *
- * 干什么: 从 Cookie 或 Authorization 头取 token,调 AuthService 换出 ActorContext。
+ * ── 为什么只认 header,不认 Cookie ─────────────────────────────
  *
- * 为什么中间件在 interface 层: 它读 HTTP 头、写 Cookie、返回状态码 —— 全是 HTTP 关注点。
- * 它对业务的依赖只有一个注入进来的 AuthService,本身不含任何权限规则
- * (规则在 domain 的 hasPermission)。这保证了两件事都能独立测:
- * 中间件用假 service 测,权限判定脱离 HTTP 测。
+ * 凭证不由浏览器自动携带,而是前端每次显式放进请求头。这一条决定带来三个直接后果:
+ *   - **没有 CSRF**。跨站页面发起的请求不会带上这个头,所以不需要 origin 白名单,
+ *     换 IP、换域名、加个 nginx 都不影响 —— 那些"这不通那不通"的问题根子在 Cookie。
+ *   - **不受 Secure / SameSite / Path 管辖**。明文 HTTP 的内网部署一样能用。
+ *   - **令牌存在 localStorage,XSS 能读到**。失去了 HttpOnly 的保护,
+ *     这是上面两条便利的代价,对应的防线变成严格转义与 CSP。
  */
 
-import { getCookie } from 'hono/cookie';
 import type { MiddlewareHandler } from 'hono';
 import type { AuthService } from '../../../application/auth/auth.service.js';
 import { unauthenticated } from '../../../domain/shared/app-error.js';
 import type { AppEnv } from '../env.js';
 
-export const authenticate = (
-  authService: AuthService,
-  cookieName: string,
-): MiddlewareHandler<AppEnv> => {
+export const authenticate = (authService: AuthService): MiddlewareHandler<AppEnv> => {
   return async (c, next) => {
-    // 两个取 token 的通道:
-    // 1. `Authorization: Bearer xxx` —— 给 curl 冒烟脚本、运维脚本、未来的移动端
-    // 2. Cookie —— 浏览器唯一通道(HttpOnly,XSS 拿不到)
-    // Bearer 优先于 Cookie:显式优先于隐式,调试时可以覆盖掉浏览器里的登录态。
     const auth = c.req.header('authorization');
-    const bearer =
+    const token =
       auth !== undefined && auth.toLowerCase().startsWith('bearer ')
         ? auth.slice('bearer '.length).trim()
         : '';
-    const token = bearer !== '' ? bearer : getCookie(c, cookieName);
 
-    if (token === undefined || token === '') throw unauthenticated();
+    if (token === '') throw unauthenticated();
 
-    const { actor, sessionId } = await authService.authenticate(token, c.get('traceId'));
+    const { actor, expiresAt } = await authService.authenticate(token, c.get('traceId'));
     c.set('actor', actor);
-    c.set('sessionId', sessionId);
+
+    /*
+     * 把过期时刻回给前端,让它能在令牌快过期时提前引导重新登录,
+     * 而不是等某个请求突然 401 把用户打断在半路。
+     *
+     * 用响应头而不是响应体:它对所有端点一致,塞进每个业务响应体里既污染契约
+     * 又要每个 toXxxWire 都记得带上。
+     */
+    c.header('X-Token-Expires-At', expiresAt.toISOString());
 
     await next();
   };

@@ -24,18 +24,16 @@ import {
   type DataScope,
 } from '../../domain/auth/actor.js';
 import { AUTH_ERROR } from '../../domain/auth/auth.errors.js';
-import type { Session, SessionPrincipal } from '../../domain/auth/auth.types.js';
+import type { SessionPrincipal } from '../../domain/auth/auth.types.js';
 import type { LoginChallenge, LoginCrypto } from '../../domain/auth/login-crypto.js';
 import type { PasswordHasher } from '../../domain/auth/password-hasher.js';
-import type { SessionRepository } from '../../domain/auth/session.repository.js';
-import type { TokenGenerator } from '../../domain/auth/token-generator.js';
+import type { TokenSigner } from '../../domain/auth/token-signer.js';
 import type { UserRepository } from '../../domain/auth/user.repository.js';
 import { forbidden, invalid, unauthenticated } from '../../domain/shared/app-error.js';
 import type { Clock } from '../../domain/shared/clock.js';
 import type { IdGenerator } from '../../domain/shared/id-generator.js';
 import type { Logger } from '../../domain/shared/logger.js';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * 续期写库的节流间隔。
@@ -43,19 +41,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * 不节流的话每个请求都要写一次事务 —— SQLite 单写者模型下这会成为全站唯一的
  * 全局写热点,业务写操作都得排在它后面。5 分钟粒度对 7 天的滑动窗口完全够用。
  */
-const TOUCH_THROTTLE_MS = 5 * 60 * 1000;
 
 export interface AuthServiceDeps {
   userRepo: UserRepository;
-  sessionRepo: SessionRepository;
   hasher: PasswordHasher;
-  tokens: TokenGenerator;
+  /** JWT 签发与验签。取代了原来的「会话表 + 随机 token」。 */
+  signer: TokenSigner;
   loginCrypto: LoginCrypto;
   ids: IdGenerator;
   clock: Clock;
   logger: Logger;
-  slidingDays: number;
-  absoluteDays: number;
   /** true 时拒绝明文密码通道,只接受加密传输(用于有安全测评要求的环境)。 */
   requireEncryptedPassword: boolean;
 }
@@ -75,10 +70,10 @@ export interface LoginResult {
   expiresAt: Date;
 }
 
-/** 认证结果:主体 + 会话 id(改密时要用它来"保留当前设备")。 */
+/** 认证结果:主体 + 令牌过期时刻(前端据此决定何时提前续期)。 */
 export interface AuthenticateResult {
   actor: ActorContext;
-  sessionId: string;
+  expiresAt: Date;
 }
 
 export class AuthService {
@@ -125,10 +120,23 @@ export class AuthService {
       this.deps.logger.info('密码哈希已升级到当前参数', { userId: user.id });
     }
 
-    const session = await this.issueSession(user.id, input.userAgent, input.ip);
-    this.deps.logger.info('登录成功', { userId: user.id, username: user.username });
+    // 权限在**签发这一刻**固化进令牌。这是 JWT 方案的核心取舍:
+    // 之后改这个用户的角色或角色的权限,都要等令牌过期重签才生效。
+    const roles = await this.deps.userRepo.findRoleGrants(user.id);
+    const merged = mergeRoles(roles);
 
-    return { token: session.raw, expiresAt: session.expiresAt };
+    const { token, expiresAt } = this.deps.signer.sign({
+      sub: user.id,
+      username: user.username,
+      roleCodes: [...merged.roleCodes],
+      superAdmin: merged.superAdmin,
+      dataScope: merged.dataScope,
+      // 超管不枚举权限码 —— hasPermission 对它恒真,塞进去只会让令牌变大
+      permissions: merged.superAdmin ? [] : [...merged.permissions],
+    });
+
+    this.deps.logger.info('登录成功', { userId: user.id, username: user.username });
+    return { token, expiresAt };
   }
 
   /**
@@ -137,43 +145,53 @@ export class AuthService {
    * 步骤: 查会话 -> 判过期 -> 判用户状态 -> 合并角色权限 -> 滑动续期。
    */
   async authenticate(rawToken: string, traceId: string): Promise<AuthenticateResult> {
-    const tokenHash = this.deps.tokens.hashOf(rawToken);
-    const principal = await this.deps.sessionRepo.findPrincipalByTokenHash(tokenHash);
+    const result = this.deps.signer.verify(rawToken);
 
-    // 刻意不区分"token 不存在"与"token 已被删除" —— 不给攻击者任何枚举线索。
-    if (principal === null) throw unauthenticated();
-
-    const now = this.deps.clock();
-    const { session, user } = principal;
-
-    if (now >= session.expiresAt || now >= session.absoluteExpiresAt) {
-      // 顺手清掉,不留垃圾。定时任务是兜底,这里是即时清理。
-      await this.deps.sessionRepo.deleteByTokenHash(tokenHash);
-      throw unauthenticated('登录已过期,请重新登录', AUTH_ERROR.TOKEN_EXPIRED);
+    if (!result.ok) {
+      // 过期给明确提示(前端据此静默跳登录页),伪造只回笼统的未认证 ——
+      // 不给攻击者"签名错了还是过期了"这种可用于试探的区分。
+      if (result.reason === 'expired') {
+        throw unauthenticated('登录已过期,请重新登录', AUTH_ERROR.TOKEN_EXPIRED);
+      }
+      throw unauthenticated();
     }
 
-    if (user.status === 'DISABLED') {
-      // 用户被禁用时把他所有会话一起清掉,而不只是当前这个 ——
-      // 否则他换个已登录的设备还能继续用。
-      await this.deps.sessionRepo.deleteAllByUserId(user.id);
-      throw forbidden('账号已被禁用,请联系管理员', { code: AUTH_ERROR.USER_DISABLED });
-    }
+    const { claims } = result;
 
-    const merged = mergeRoles(principal.roles);
+    /*
+     * 这里**不查库**,主体信息全部来自令牌。
+     *
+     * 代价是明确的:用户被禁用、角色被改、权限被收回,都要等令牌过期才生效,
+     * 期间这个令牌照常可用。选 JWT 就是选了这一条(见 domain/auth/token-signer.ts)。
+     *
+     * 需要立即生效的场景只有一个可行做法:把令牌有效期调短(JWT_TTL_SECONDS),
+     * 用「更早过期」换「更快生效」。默认 7 天是按内网业务系统的使用习惯定的。
+     */
     const actor: ActorContext = {
-      actorId: user.id,
-      username: user.username,
-      ...merged,
+      actorId: claims.sub,
+      username: claims.username,
+      roleCodes: claims.roleCodes,
+      superAdmin: claims.superAdmin,
+      dataScope: claims.dataScope === 'SELF' ? 'SELF' : 'ALL',
+      permissions: new Set(claims.permissions),
       traceId,
     };
 
-    await this.slideExpiry(session, now);
-    return { actor, sessionId: session.id };
+    return { actor, expiresAt: result.expiresAt };
   }
 
-  /** 登出。幂等 —— 重复调用或 token 已失效都不报错。 */
-  async logout(rawToken: string): Promise<void> {
-    await this.deps.sessionRepo.deleteByTokenHash(this.deps.tokens.hashOf(rawToken));
+  /**
+   * 登出。
+   *
+   * [注意] 服务端**什么也做不了** —— JWT 是自验证的,签出去就无法收回,
+   * 没有可删除的会话记录。真正的登出发生在前端:把本地存的令牌删掉。
+   * 这个方法保留只是为了给前端一个统一的调用点(将来若加审计日志有地方挂)。
+   *
+   * 这是选 JWT 时一并接受的代价。要能强制下线就得建吊销表,
+   * 那等于每个请求又要查一次库,换 JWT 的意义就没了。
+   */
+  async logout(_rawToken: string): Promise<void> {
+    // 无状态,无需操作
   }
 
   /**
@@ -197,7 +215,6 @@ export class AuthService {
   async changePassword(
     input: { oldPassword: string; newPassword: string },
     actor: ActorContext,
-    sessionId: string,
   ): Promise<void> {
     const user = await this.deps.userRepo.findById(actor.actorId);
     if (user === null) throw unauthenticated();
@@ -217,7 +234,10 @@ export class AuthService {
       updatedAt: now,
       updatedBy: actor.actorId,
     });
-    await this.deps.sessionRepo.deleteOthersByUserId(user.id, sessionId);
+    // [注意] 这里**踢不掉其他设备**。改密码的常见动机是"怀疑账号被盗",
+    // 会话方案下可以立刻让其他设备失效,JWT 方案下做不到 ——
+    // 已签发的令牌在有效期内始终有效。改密后旧令牌仍可用到过期。
+    // 想缩小这个窗口只能调短 JWT_TTL_SECONDS。
 
     this.deps.logger.info('用户修改了密码', { userId: user.id });
   }
@@ -261,52 +281,6 @@ export class AuthService {
     }
 
     return input.password;
-  }
-
-  /** 签发会话。 */
-  private async issueSession(
-    userId: string,
-    userAgent: string | undefined,
-    ip: string | undefined,
-  ): Promise<{ raw: string; expiresAt: Date }> {
-    const now = this.deps.clock();
-    const { raw, hash } = this.deps.tokens.issue();
-
-    const absoluteExpiresAt = new Date(now.getTime() + this.deps.absoluteDays * DAY_MS);
-    const expiresAt = new Date(
-      Math.min(now.getTime() + this.deps.slidingDays * DAY_MS, absoluteExpiresAt.getTime()),
-    );
-
-    const session: Session = {
-      id: this.deps.ids.next(),
-      tokenHash: hash,
-      userId,
-      expiresAt,
-      absoluteExpiresAt,
-      lastSeenAt: now,
-      createdAt: now,
-      // 截断:UA 字符串可以很长,而它只用于"我的登录设备"的展示
-      userAgent: userAgent?.slice(0, 200) ?? null,
-      ip: ip ?? null,
-    };
-
-    await this.deps.sessionRepo.create(session);
-    return { raw, expiresAt };
-  }
-
-  /**
-   * 滑动续期,带写库节流。
-   *
-   * 新的过期时间取 min(now + 滑动窗口, 绝对上限) —— 滑动永远不能越过绝对上限,
-   * 否则一个天天使用的账号会话就永生了。
-   */
-  private async slideExpiry(session: Session, now: Date): Promise<void> {
-    if (now.getTime() - session.lastSeenAt.getTime() < TOUCH_THROTTLE_MS) return;
-
-    const next = new Date(
-      Math.min(now.getTime() + this.deps.slidingDays * DAY_MS, session.absoluteExpiresAt.getTime()),
-    );
-    await this.deps.sessionRepo.touch(session.id, now, next);
   }
 
   /**

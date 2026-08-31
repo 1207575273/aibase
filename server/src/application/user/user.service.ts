@@ -130,10 +130,16 @@ export class UserService {
       });
       await repos.user.replaceRoles(id, input.roleIds);
 
-      // 禁用要立刻踢掉全部在线会话,否则他手上已登录的标签页还能继续操作。
-      if (beingDisabled) {
-        await repos.session.deleteAllByUserId(id);
-      }
+      /*
+       * [限制] 禁用**不能立刻生效**。
+       *
+       * 会话方案下这里会删掉该用户的全部在线会话,他手上已登录的标签页立刻失效。
+       * JWT 方案下服务端不持有任何可删除的东西 —— 已签发的令牌在有效期内始终验得过,
+       * 被禁用的人最长可以继续操作到 JWT_TTL_SECONDS 耗尽。
+       *
+       * 要缩短这个窗口只能调短令牌有效期;要立即失效只能换回会话查库。
+       * 这是选 JWT 时一并接受的代价,不是这里漏了一行。
+       */
     });
 
     this.deps.logger.info('更新用户', {
@@ -157,8 +163,8 @@ export class UserService {
 
     await this.deps.uow.run(async (repos) => {
       await repos.user.update(id, { passwordHash, updatedAt: now, updatedBy: actor.actorId });
-      // 密码被管理员重置意味着"原持有者可能已失去控制",全部踢掉。
-      await repos.session.deleteAllByUserId(id);
+      // [限制] 同上:重置密码也踢不掉已登录的会话,旧令牌在过期前仍然可用。
+      // 密码被管理员重置通常意味着"原持有者可能已失去控制",这个窗口值得注意。
     });
 
     this.deps.logger.warn('管理员重置了用户密码', {

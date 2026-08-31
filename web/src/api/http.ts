@@ -12,6 +12,7 @@
 
 import type { ErrorResponse } from '@app/contracts';
 import axios, { AxiosError } from 'axios';
+import { tokenStore } from './token-store.js';
 
 /**
  * 归一化后的接口错误。业务层只认这一个类型。
@@ -65,8 +66,22 @@ export const http = axios.create({
   // 开发态由 vite proxy 转发到后端,生产态是同源 —— 两种形态下路径相同
   baseURL: API_BASE,
   timeout: 30_000,
-  // 关键: 让浏览器带上 HttpOnly 的会话 Cookie
-  withCredentials: true,
+  // 不带 Cookie —— 凭证走 Authorization 头,见下方请求拦截器与 token-store.ts
+  withCredentials: false,
+});
+
+/*
+ * 请求拦截器:把令牌放进 Authorization 头。
+ *
+ * 这是整个应用唯一携带凭证的地方。因为是显式携带而非浏览器自动带,
+ * 跨站页面伪造的请求不会有这个头 —— CSRF 天然不成立,后端也就不需要 origin 白名单。
+ */
+http.interceptors.request.use((cfg) => {
+  const token = tokenStore.get();
+  if (token !== null && token !== '') {
+    cfg.headers.set('Authorization', `Bearer ${token}`);
+  }
+  return cfg;
 });
 
 http.interceptors.response.use(

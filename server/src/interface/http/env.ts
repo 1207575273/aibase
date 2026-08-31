@@ -20,7 +20,6 @@ export interface AppEnv {
     /** 当前主体。只有经过 authenticate 中间件的路由才有。 */
     actor?: ActorContext;
     /** 当前会话 id。改密时用来保留当前设备。 */
-    sessionId?: string;
   };
 }
 
@@ -41,10 +40,3 @@ export const getActor = (c: AppContext): ActorContext => {
   return actor;
 };
 
-export const getSessionId = (c: AppContext): string => {
-  const sessionId = c.get('sessionId');
-  if (sessionId === undefined) {
-    throw internal('路由未挂载 authenticate 中间件,拿不到会话 id');
-  }
-  return sessionId;
-};
