@@ -1,7 +1,7 @@
 /**
  * 端口清理 —— 杀掉占用本项目端口的进程。
  *
- * 干什么: 读 ports.json,找出占用这些端口的进程,连子进程一起杀掉。
+ * 干什么: 从 ports.mjs(它读 .env)取端口,找出占用的进程,连子进程一起杀掉。
  * 什么时候用: 上次开发进程没退干净、报 EADDRINUSE 起不来时,`pnpm kill` 一下。
  *
  * 为什么需要它: 即使 dev.mjs 已经处理了正常的 Ctrl+C,还是有别的情况会留下孤儿 ——
@@ -9,12 +9,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const ports = JSON.parse(readFileSync(resolve(ROOT, 'ports.json'), 'utf8'));
+// 端口与 dev.mjs、vite、后端 config 同源 —— 都来自 .env
+import { ports } from './ports.mjs';
 const isWindows = process.platform === 'win32';
 
 /**
@@ -85,7 +82,13 @@ const kill = (pid) => {
 };
 
 let killed = 0;
-for (const [name, port] of Object.entries(ports)) {
+// [注意] 只遍历真正的端口。ports 对象里还有 contextPrefix / contextBase 两个字符串,
+// 一起遍历会打出 "contextBase :/ 未被占用" 这种没有意义的行。
+const TARGETS = [
+  ['server', ports.server],
+  ['web', ports.web],
+];
+for (const [name, port] of TARGETS) {
   const pids = findPids(port);
   if (pids.length === 0) {
     process.stdout.write(`[SKIP] ${name} :${port} 未被占用\n`);
