@@ -1,0 +1,58 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+build/
+web/dist/
+server/dist/
+
+# Prisma 生成物(每次 pnpm install / db:generate 重新生成,不入库)
+server/src/generated/
+
+# 运行时数据:SQLite 库文件 + WAL/SHM 边车文件
+# 备份数据库必须三个文件一起带走,或用 VACUUM INTO
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 环境变量:.env 存本机真实配置,只有 .env.example 入库
+.env
+.env.local
+.env.*.local
+
+# 日志
+logs/
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 测试与工具产物
+coverage/
+.vitest/
+# 浏览器自动化调试产物(快照 yml / 控制台 log / 截图)
+.playwright-mcp/
+test-results/
+playwright-report/
+*.png
+.tmp/
+*.tsbuildinfo
+.tanstack/
+
+# TanStack Router 自动生成的路由树,每次 vite 启动时重建
+web/src/routeTree.gen.ts
+
+# AI 编码工具的本机配置不入库(权限允许列表等,与机器绑定)。
+# skills 也不入库 —— init-node-project 是**生成这个模板的工具**,
+# 不是模板的一部分。它只是恰好放在这里开发,归属在 ~/.claude/skills/。
+# 模板自己需要的开发指引全在 CLAUDE.md 里,不依赖任何 skill。
+.claude/
+.cursor/
+.windsurf/
+.idea/
+.vscode/

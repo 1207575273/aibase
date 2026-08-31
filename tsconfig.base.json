@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true,
+
+    /*
+     * 增量检查。tsc 把上次的类型图存进 .tsbuildinfo,下次只重算受影响的部分。
+     *
+     * 为什么值得开: 类型检查是这个项目里最慢的一步(冷启动约 21 秒,
+     * 三个包加起来),而 AI 驱动的开发是「改一个文件 -> 立刻验证」的高频循环,
+     * 每轮多等 20 秒是最伤的一种慢。开了之后只改一两个文件的二次检查是秒级。
+     *
+     * noEmit 与 incremental 可以共存(TS 4.0+):不产出 js,只产出 .tsbuildinfo。
+     * 文件按包分开放在各自的 node_modules/.cache 下,不污染工作区,
+     * 也天然被 .gitignore 挡住,不会误提交。
+     */
+    "incremental": true
+  }
+}

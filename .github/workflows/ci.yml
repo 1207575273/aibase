@@ -1,0 +1,54 @@
+# CI —— 每次 PR 与 push 必过。
+#
+# 为什么必须有: 五条 eslint 架构边界规则如果没有强制执行点,等于没有。
+# 而且这里跑的 migrate deploy 会把「schema 改了但没生成迁移」这类漂移暴露出来 ——
+# 那种问题在本地开发时完全不可见(本地库早就手工同步过了)。
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 读 .nvmrc,不在这里再写一遍版本号(写两遍必然漂移)
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # --frozen-lockfile: lockfile 与 package.json 不一致时直接失败,
+      # 而不是悄悄改 lockfile —— 那会让 CI 装到与本地不同的依赖版本
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 架构边界检查
+        run: pnpm lint
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      # 用临时库跑真实迁移。这一步顺带验证了迁移文件本身是可执行的
+      - name: 应用数据库迁移
+        run: pnpm db:deploy
+        env:
+          DATABASE_URL: file:./data/ci.db
+
+      - name: 单元测试
+        run: pnpm test
+
+      - name: 端到端测试
+        run: pnpm test:e2e
+
+      # build 放最后: 前面全过了才值得花时间打包
+      - name: 构建
+        run: pnpm build

@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [
+      "node"
+    ],
+    "outDir": "dist",
+    "tsBuildInfoFile": "../node_modules/.cache/tsbuildinfo/server.tsbuildinfo"
+  },
+  "include": [
+    "src",
+    "tests",
+    "prisma"
+  ]
+}

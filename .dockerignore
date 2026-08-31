@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+dist
+**/dist
+data
+*.db
+*.db-wal
+*.db-shm
+.git
+.env
+.env.local
+logs
+coverage
+.playwright-mcp
+*.png
+server/src/generated
+web/src/routeTree.gen.ts

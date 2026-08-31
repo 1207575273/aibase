@@ -1,0 +1,7 @@
+# 扁平结构:每个一级目录就是一个 workspace 包,不再有 apps/ packages/ 分类层。
+# 加新服务(如 ocr-server)时在这里追加一行。
+packages:
+  - "server"
+  - "web"
+  - "e2e"
+  - "contracts"

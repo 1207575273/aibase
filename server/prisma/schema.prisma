@@ -1,0 +1,143 @@
+// Prisma schema —— 数据库结构的单一真源。
+//
+// ── 全局约定(新增 model 必须遵守)──────────────────────────────
+//
+// 1. **审计四件套**: 每张业务表都必须有 createdAt / updatedAt / createdBy / updatedBy。
+//    时间由应用层从注入的 Clock 取值后显式写入,**不用** @default(now()) / @updatedAt ——
+//    那样测试里就没法把时间固定住,而且"同一次创建的 createdAt 与 updatedAt 严格相等"
+//    这种可断言的事实会丢掉。
+//
+// 2. **正常写 @relation 与外键**。姊妹项目 work_nm_tp 全库禁用了 DB 外键
+//    (PRAGMA foreign_keys=OFF + 零 @relation),级联删除改由仓储手写事务负责。
+//    那是它的一次特定迁移决策,对通用模板是纯负资产:丢掉 include 的类型安全、
+//    关联查询退化成两次查询 + 内存拼装、每个 delete 都要人肉记得断链
+//    (忘了就是悬空引用,而且 SQLite 不会报错)。本模板恢复外键。
+//
+// 3. **id 用 UUID v7 字符串**,由应用层的 IdGenerator 生成,不用数据库自增。
+//    v7 高位是毫秒时间戳,字典序≈时间序,既有随机 id 的好处又不破坏索引局部性。
+//
+// 4. **表名加前缀**: 系统表 sys_,业务表 biz_。数据库里一眼能分清哪些是框架的、
+//    哪些是业务的,接手项目时不用逐张表点开看。
+//
+// 5. **枚举用 String 而不是 Prisma enum**。SQLite 没有原生 enum,Prisma 是用
+//    CHECK 约束模拟的,改枚举值要走迁移。值域由应用层的 as const 数组约束,
+//    加一个状态只改一行代码、零迁移。
+//
+// 6. **不用 deletedAt 软删**。软删会污染此后每一条查询(每个 where 都要带
+//    deletedAt: null,漏一个就是数据泄漏)。"离职/停用"这类语义用业务状态字段表达;
+//    真需要留痕就硬删 + 写审计日志。
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7 起 datasource 里**不再写 url** —— 迁移用的连接串在根目录 prisma.config.ts,
+// 运行时连接由 PrismaClient 构造时传入的 driver adapter 提供。
+// 这消灭了 v6 时代"schema 里一个 url、代码里一个 adapter,两者可能指向不同库"的隐患。
+datasource db {
+  provider = "sqlite"
+}
+
+// ══════════════════════════════════════════════════════════════
+//  系统域 —— 用户 / 角色 / 权限 / 会话
+// ══════════════════════════════════════════════════════════════
+
+model User {
+  id           String  @id
+  /// 登录名。唯一,不可修改(它是审计日志里的主体标识,改了历史日志就对不上人)
+  username     String  @unique
+  displayName  String
+  /// PHC 风格哈希串: $scrypt$N=..,r=..,p=..$salt$dk。绝不出现在任何 wire 映射里
+  passwordHash String
+  /// ACTIVE | DISABLED。值域由 domain 的 USER_STATUSES 约束
+  status       String  @default("ACTIVE")
+
+  createdAt DateTime
+  updatedAt DateTime
+  createdBy String?
+  updatedBy String?
+
+  roles    UserRole[]
+  sessions Session[]
+
+  @@index([status])
+  @@map("sys_user")
+}
+
+model Role {
+  id          String  @id
+  /// 大写下划线,如 ADMIN / OPERATOR。与权限码(小写冒号)形态不同,读日志时一眼可辨
+  code        String  @unique
+  name        String
+  description String?
+  /// true = 绕过一切权限码校验。比通配符权限码更显式、可审计,且允许多个超管角色
+  superAdmin  Boolean @default(false)
+  /// true = 禁止删除、禁止改 code(可改名字和权限)。保证系统永远有一个可用的管理员角色
+  builtin     Boolean @default(false)
+  /// ALL | SELF。行级数据权限,扩展成部门维度时在这里加值
+  dataScope   String  @default("ALL")
+
+  createdAt DateTime
+  updatedAt DateTime
+  createdBy String?
+  updatedBy String?
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("sys_role")
+}
+
+/// 用户-角色 多对多。
+/// 两侧 onDelete 刻意不同:
+///   user Cascade  -> 删用户自动清关联,不留垃圾
+///   role Restrict -> 角色仍被引用时数据库直接拒绝删除,是 ROLE_IN_USE 的竞态兜底
+///                    (应用层会先 count 给出友好报错,这条是并发下的最后一道防线)
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("sys_user_role")
+}
+
+/// 角色-权限码。
+/// 刻意**不建 Permission 表**: 权限码的真源在代码里(@app/contracts 的 PERMISSIONS 常量),
+/// 本表只存字符串引用。代码删掉某个 code 后,库里的残留行在读取时被 isKnownPermission
+/// 过滤掉即可,零数据迁移。
+model RolePermission {
+  roleId String
+  code   String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, code])
+  @@map("sys_role_permission")
+}
+
+/// 会话 —— 不透明 token 的服务端载荷。
+/// 库里只存 token 的 sha256,明文只在签发那一刻存在于 HTTP 响应里。
+model Session {
+  id                String   @id
+  /// sha256(明文 token) 的 hex。唯一索引 = 每请求的查找路径,必须有
+  tokenHash         String   @unique
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 滑动过期:每次活跃往后推,但不能越过 absoluteExpiresAt
+  expiresAt         DateTime
+  /// 绝对上限:无论多活跃,超过就必须重新登录,防止会话永生
+  absoluteExpiresAt DateTime
+  /// 上次活跃时间。用于节流续期写库(每 5 分钟才写一次)
+  lastSeenAt        DateTime
+  createdAt         DateTime
+  /// 仅用于"我的登录设备"展示,截断到 200 字符
+  userAgent         String?
+  ip                String?
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sys_session")
+}

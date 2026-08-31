@@ -1,0 +1,57 @@
+{
+  "name": "keel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Keel",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "postinstall": "prisma generate",
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "pnpm --filter @app/server dev",
+    "dev:web": "pnpm --filter @app/web dev",
+    "kill": "node scripts/kill.mjs",
+    "build": "pnpm -r --parallel build",
+    "start": "node server/dist/main.js",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
+    "test": "pnpm --filter @app/server test",
+    "test:changed": "pnpm --filter @app/server exec vitest run --changed HEAD",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx server/prisma/seed.ts",
+    "db:reset": "prisma migrate reset --force && pnpm db:seed",
+    "db:studio": "prisma studio",
+    "test:e2e": "pnpm --filter @app/e2e test",
+    "test:all": "pnpm typecheck && pnpm lint && pnpm build && pnpm test && pnpm test:e2e",
+    "logs": "node scripts/logs.mjs"
+  },
+  "devDependencies": {
+    "@typescript-eslint/parser": "8.68.0",
+    "eslint": "9.39.4",
+    "eslint-import-resolver-typescript": "4.4.5",
+    "eslint-plugin-boundaries": "6.0.2",
+    "prisma": "7.10.0",
+    "tsx": "4.23.12",
+    "typescript": "6.0.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "better-sqlite3",
+      "esbuild",
+      "prisma"
+    ],
+    "overrides": {
+      "prisma": "7.10.0",
+      "@prisma/client": "7.10.0",
+      "@prisma/adapter-better-sqlite3": "7.10.0",
+      "better-sqlite3": "12.11.1"
+    }
+  }
+}

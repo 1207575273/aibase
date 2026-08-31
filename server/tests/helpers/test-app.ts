@@ -1,0 +1,160 @@
+/**
+ * 路由测试夹具 —— 建一个连着临时库的完整 app,并准备好可用的登录态。
+ *
+ * 干什么: 一行拿到「app + 管理员 token + 只读用户 token」。
+ * 解决什么问题: 每个路由测试文件都要重复"建库 -> 建上下文 -> 装配 -> 建管理员 -> 登录"
+ *   这五步。抽出来之后测试文件只关心自己要验的东西。
+ *
+ * [关键] 它调用的是**生产的装配函数** buildModules —— 测试和 main.ts 用同一份装配。
+ *   姊妹项目的路由测试在 beforeEach 里手工 new 了 24 个 UseCase 把装配抄了第二份,
+ *   于是装配改一次要同步改 N 个测试文件。
+ */
+
+import type { Hono } from 'hono';
+import { v7 as uuidv7 } from 'uuid';
+import { buildModules } from '../../src/composition/modules.js';
+import { createContext, type AppContext } from '../../src/composition/context.js';
+import { silentLogger } from '../../src/infrastructure/logger/silent-logger.js';
+import { ScryptPasswordHasher } from '../../src/infrastructure/security/scrypt-password-hasher.js';
+import { buildApp } from '../../src/interface/http/app.js';
+import type { AppEnv } from '../../src/interface/http/env.js';
+import { setupTestDb, type TestDb } from './test-db.js';
+
+export const TEST_ADMIN = { username: 'admin', password: 'admin-pass-12345' };
+export const TEST_VIEWER = { username: 'viewer', password: 'viewer-pass-12345' };
+
+export interface TestApp {
+  app: Hono<AppEnv>;
+  ctx: AppContext;
+  db: TestDb;
+  /** 超管 token,拥有全部权限。 */
+  adminToken: string;
+  adminId: string;
+  /** 只读用户 token,只有 user:read。用来验证权限拦截确实生效。 */
+  viewerToken: string;
+  viewerId: string;
+  cleanup: () => Promise<void>;
+}
+
+/** 带 Bearer token 发请求的小助手。 */
+export const authed = (
+  app: Hono<AppEnv>,
+  token: string,
+): ((path: string, init?: RequestInit) => Promise<Response>) => {
+  return async (path, init = {}) =>
+    app.request(path, {
+      ...init,
+      headers: {
+        ...(init.headers as Record<string, string> | undefined),
+        Authorization: `Bearer ${token}`,
+        ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+    });
+};
+
+/** POST JSON 的小助手。 */
+export const postJson = (
+  app: Hono<AppEnv>,
+  token: string,
+  path: string,
+  body: unknown,
+): Promise<Response> =>
+  authed(app, token)(path, { method: 'POST', body: JSON.stringify(body) });
+
+export const setupTestApp = async (): Promise<TestApp> => {
+  const db = await setupTestDb();
+  const ctx = await createContext({ dbPath: db.dbPath, logger: silentLogger });
+  const app = buildApp({
+    ...(await buildModules(ctx)),
+    version: '0.0.0-test',
+    startedAt: new Date(),
+  });
+
+  const hasher = new ScryptPasswordHasher();
+  const now = new Date();
+
+  // 超管角色 + 账号
+  const adminRoleId = uuidv7();
+  await ctx.prisma.role.create({
+    data: {
+      id: adminRoleId,
+      code: 'ADMIN',
+      name: '超级管理员',
+      superAdmin: true,
+      builtin: true,
+      dataScope: 'ALL',
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+
+  const adminId = uuidv7();
+  await ctx.prisma.user.create({
+    data: {
+      id: adminId,
+      username: TEST_ADMIN.username,
+      displayName: '管理员',
+      passwordHash: await hasher.hash(TEST_ADMIN.password),
+      status: 'ACTIVE',
+      createdAt: now,
+      updatedAt: now,
+      roles: { create: [{ roleId: adminRoleId }] },
+    },
+  });
+
+  // 只读角色 + 账号:只给 user:read
+  const viewerRoleId = uuidv7();
+  await ctx.prisma.role.create({
+    data: {
+      id: viewerRoleId,
+      code: 'VIEWER',
+      name: '只读用户',
+      superAdmin: false,
+      builtin: false,
+      dataScope: 'ALL',
+      createdAt: now,
+      updatedAt: now,
+      permissions: { create: [{ code: 'user:read' }] },
+    },
+  });
+
+  const viewerId = uuidv7();
+  await ctx.prisma.user.create({
+    data: {
+      id: viewerId,
+      username: TEST_VIEWER.username,
+      displayName: '只读小王',
+      passwordHash: await hasher.hash(TEST_VIEWER.password),
+      status: 'ACTIVE',
+      createdAt: now,
+      updatedAt: now,
+      roles: { create: [{ roleId: viewerRoleId }] },
+    },
+  });
+
+  const login = async (credentials: { username: string; password: string }): Promise<string> => {
+    const res = await app.request('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials),
+    });
+    if (res.status !== 200) {
+      throw new Error(`测试夹具登录失败(${res.status}): ${await res.text()}`);
+    }
+    return ((await res.json()) as { token: string }).token;
+  };
+
+  return {
+    app,
+    ctx,
+    db,
+    adminToken: await login(TEST_ADMIN),
+    adminId,
+    viewerToken: await login(TEST_VIEWER),
+    viewerId,
+    cleanup: async (): Promise<void> => {
+      await ctx.prisma.$disconnect();
+      await db.cleanup();
+    },
+  };
+};

@@ -1,0 +1,21 @@
+{
+  "name": "@app/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "前后端共享的 HTTP 线上契约 — 请求体 zod schema + 响应 TS 类型",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}
