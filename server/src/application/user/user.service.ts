@@ -1,12 +1,18 @@
 /**
  * 用户服务 —— 系统用户的管理。
  *
- * 这个 Service 示范了 UnitOfWork 的真实用途:
- * 「改用户」这个动作可能同时要写 sys_user、重建 sys_user_role、清 sys_session,
- * 三张表的写入必须原子 —— 中途失败留下"角色改了但会话没清"的状态是安全事故。
+ * 这个 Service 示范两件事,加业务模块时照抄:
+ *
+ * 1. **UnitOfWork 的真实用途**:「改用户」要同时写 sys_user 和重建 sys_user_role,
+ *    两张表的写入必须原子 —— 中途失败留下"基本信息改了但角色没换"的状态。
+ *
+ * 2. **行级数据权限的四个入口**:list / get / update / remove(以及 resetPassword)
+ *    **每一个**都要过 scope 判定。只做列表是经典漏洞:列表里看不到那一行,
+ *    但知道 id 就能直接 GET /users/:id 读出来、POST /users/:id/update 改掉它。
+ *    判定逻辑是 domain 的纯函数 scopeOwnerOf / isInDataScope,这里只负责调用。
  */
 
-import type { ActorContext } from '../../domain/auth/actor.js';
+import { isInDataScope, scopeOwnerOf, type ActorContext } from '../../domain/auth/actor.js';
 import { AUTH_ERROR } from '../../domain/auth/auth.errors.js';
 import type { User, UserStatus } from '../../domain/auth/auth.types.js';
 import type { PasswordHasher } from '../../domain/auth/password-hasher.js';
@@ -80,19 +86,22 @@ export class UserService {
     return { id: user.id };
   }
 
-  async get(id: string): Promise<UserWithRoles> {
-    return mustFind(
+  async get(id: string, actor: ActorContext): Promise<UserWithRoles> {
+    const found = await mustFind(
       () => this.deps.userRepo.findWithRoles(id),
       AUTH_ERROR.USER_NOT_FOUND,
       `用户不存在: ${id}`,
     );
+    this.assertInScope(found.user.createdBy, actor, id);
+    return found;
   }
 
-  async list(input: ListUserInput): Promise<Page<UserWithRoles>> {
+  async list(input: ListUserInput, actor: ActorContext): Promise<Page<UserWithRoles>> {
     return this.deps.userRepo.list({
       ...toPageParams(input.page, input.size),
       keyword: input.keyword,
       status: input.status,
+      scopeOwnerId: scopeOwnerOf(actor),
     });
   }
 
@@ -109,6 +118,7 @@ export class UserService {
       AUTH_ERROR.USER_NOT_FOUND,
       `用户不存在: ${id}`,
     );
+    this.assertInScope(existing.createdBy, actor, id);
 
     // 禁止把自己禁用掉 —— 操作者会当场把自己锁在系统外面。
     if (id === actor.actorId && input.status === 'DISABLED') {
@@ -119,8 +129,9 @@ export class UserService {
     const now = this.deps.clock();
     const beingDisabled = existing.status === 'ACTIVE' && input.status === 'DISABLED';
 
-    // 三张表的写入必须原子。这正是 UnitOfWork 存在的理由 ——
-    // 姊妹项目没有这个抽象,只能把级联逻辑塞进仓储内部。
+    // sys_user 与 sys_user_role 两张表的写入必须原子:中途失败会留下
+    // "基本信息改了但角色没换"的状态。这正是 UnitOfWork 存在的理由 ——
+    // 曾见过的一个项目没有这个抽象,只能把级联逻辑塞进仓储内部。
     await this.deps.uow.run(async (repos) => {
       await repos.user.update(id, {
         displayName: input.displayName,
@@ -150,21 +161,31 @@ export class UserService {
     });
   }
 
-  /** 管理员重置密码:不需要原密码,但会踢掉该用户全部会话。 */
+  /**
+   * 管理员重置密码:不需要原密码。
+   *
+   * [限制] 重置密码**踢不掉**该用户已登录的设备 —— JWT 是自验证的,
+   * 旧令牌在 JWT_TTL_SECONDS 耗尽前始终有效。密码被管理员重置通常意味着
+   * "原持有者可能已失去控制",这个窗口值得注意,缩小它只能调短令牌有效期。
+   */
   async resetPassword(id: string, newPassword: string, actor: ActorContext): Promise<void> {
-    await mustFind(
+    const existing = await mustFind(
       () => this.deps.userRepo.findById(id),
       AUTH_ERROR.USER_NOT_FOUND,
       `用户不存在: ${id}`,
     );
+    this.assertInScope(existing.createdBy, actor, id);
 
     const now = this.deps.clock();
     const passwordHash = await this.deps.hasher.hash(newPassword);
 
-    await this.deps.uow.run(async (repos) => {
-      await repos.user.update(id, { passwordHash, updatedAt: now, updatedBy: actor.actorId });
-      // [限制] 同上:重置密码也踢不掉已登录的会话,旧令牌在过期前仍然可用。
-      // 密码被管理员重置通常意味着"原持有者可能已失去控制",这个窗口值得注意。
+    // 单条写入,不套 uow.run ——
+    // 会话方案下这里还要顺带清 sys_session 才需要事务,JWT 之后只剩这一条 update。
+    // 包一个只有一次写的事务是空壳,徒增读代码的人的困惑。
+    await this.deps.userRepo.update(id, {
+      passwordHash,
+      updatedAt: now,
+      updatedBy: actor.actorId,
     });
 
     this.deps.logger.warn('管理员重置了用户密码', {
@@ -183,8 +204,9 @@ export class UserService {
       AUTH_ERROR.USER_NOT_FOUND,
       `用户不存在: ${id}`,
     );
+    this.assertInScope(existing.createdBy, actor, id);
 
-    // user_role 与 session 由数据库外键 Cascade 自动清理。
+    // user_role 由数据库外键 Cascade 自动清理。
     await this.deps.userRepo.delete(id);
 
     this.deps.logger.warn('删除用户', {
@@ -200,11 +222,31 @@ export class UserService {
    *
    * 这是业务规则校验(不是格式校验),所以放在 Service 而不是 zod。
    * 不校验的话数据库外键会拒绝,但报错信息是 "FK_VIOLATION" 这种用户看不懂的东西。
+   *
+   * 一次 findByIds 查完,不在循环里逐个查 —— 那是 N+1,
+   * 而这个方法是被 create 和 update 两条主路径调用的。
    */
   private async assertRolesExist(roleIds: readonly string[]): Promise<void> {
-    for (const roleId of roleIds) {
-      const role = await this.deps.roleRepo.findById(roleId);
-      if (role === null) throw notFound(AUTH_ERROR.ROLE_NOT_FOUND, `角色不存在: ${roleId}`);
+    if (roleIds.length === 0) return;
+
+    const found = await this.deps.roleRepo.findByIds(roleIds);
+    const foundIds = new Set(found.map((r) => r.id));
+    const missing = roleIds.find((id) => !foundIds.has(id));
+
+    if (missing !== undefined) {
+      throw notFound(AUTH_ERROR.ROLE_NOT_FOUND, `角色不存在: ${missing}`);
+    }
+  }
+
+  /**
+   * 行级数据权限断言 —— 越界时抛 **404 而不是 403**。
+   *
+   * 403 等于承认"这条记录存在,只是你不能碰",配合可枚举的 id 就成了存在性探测接口。
+   * 404 让"不存在"与"不归你管"对外不可区分,与列表里看不到它保持一致。
+   */
+  private assertInScope(createdBy: string | null, actor: ActorContext, id: string): void {
+    if (!isInDataScope(createdBy, actor)) {
+      throw notFound(AUTH_ERROR.USER_NOT_FOUND, `用户不存在: ${id}`);
     }
   }
 }

@@ -15,7 +15,7 @@
  *   R5  前端业务层不得直接 import axios(只走 api/http 封装)
  *
  * [重要] 加规则时必须做「注入探针」验证: 故意写一行违规代码,确认 eslint 真的报错,
- *   再删掉。姊妹项目 work_nm_tp 的 R3 第一版就是静默失效的假绿(boundaries v6 废弃了
+ *   再删掉。曾见过的一个项目的 R3 第一版就是静默失效的假绿(boundaries v6 废弃了
  *   external 规则但旧写法不报错),没有探针根本发现不了。
  */
 import boundaries from 'eslint-plugin-boundaries';
@@ -75,7 +75,7 @@ export default [
                 'R1: domain 不得依赖外层。domain 只放类型 + Repository 接口 + 纯函数,任何 IO 都通过接口反转出去。',
             },
             {
-              // R1b —— 姊妹项目没有这条,后果是 15 个 application 文件 import 了
+              // R1b —— 曾见过的一个项目没有这条,后果是 15 个 application 文件 import 了
               // infrastructure(其中 5 个直接 import PrismaClient)。所谓"有意识的读例外"
               // 一旦没有边界,就会变成默认写法。本模板不搞 CQRS,这个口子从一开始就焊死。
               from: [{ type: 'application' }],
@@ -122,7 +122,7 @@ export default [
   },
 
   // ── R4: 禁止裸读 process.env ─────────────────────────────────────
-  // 姊妹项目 37 处裸读散在 16 个文件,导致同一个端口在四个地方写了三个不同的值。
+  // 曾见过的一个项目有 37 处裸读散在 16 个文件,导致同一个端口在四个地方写了三个不同的值。
   // 全部收口到 config 模块:zod 校验 + 启动 fail-fast + 类型化导出。
   {
     files: ['server/src/**/*.ts'],

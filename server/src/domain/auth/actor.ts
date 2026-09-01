@@ -5,7 +5,7 @@
  *         用于权限判定、行级数据过滤、审计字段填充。
  *
  * 解决什么问题:
- *   姊妹项目 work_nm_tp 的 38 张表零个 createdBy、UseCase 入参里没有 actor、
+ *   曾见过的一个项目的 38 张表零个 createdBy、UseCase 入参里没有 actor、
  *   契约里没有 Principal —— 意味着后补鉴权时要动 schema、动全部 UseCase 签名、
  *   动全部 wire 映射。「主体」这条线必须一开始就预埋,哪怕暂时只填 system。
  *
@@ -86,6 +86,37 @@ export const systemActor = (traceId = 'system'): ActorContext => ({
  */
 export const hasPermission = (actor: ActorContext, code: string): boolean =>
   actor.superAdmin || actor.permissions.has(code);
+
+/**
+ * 行级数据权限的过滤锚点 —— 「这个人只能看谁创建的数据」。
+ *
+ * 返回 undefined 表示**不过滤**(看全部);返回 userId 表示只能看 createdBy 等于它的行。
+ *
+ * 为什么做成返回值而不是让 Repository 自己判断 actor:
+ *   Repository 天然不该知道"主体"这个概念(见本文件头注释第 4 条)。
+ *   Service 用这个函数把权限语义翻译成一个普通查询字段 scopeOwnerId 传下去,
+ *   Repository 只认识"按 createdBy 过滤"这件事,分层就没有被打破。
+ *
+ * 超管豁免与 hasPermission 恒真保持一致 —— 否则会出现"权限全有但数据看不见"的
+ * 自相矛盾状态。
+ */
+export const scopeOwnerOf = (actor: ActorContext): string | undefined =>
+  actor.superAdmin || actor.dataScope === 'ALL' ? undefined : actor.actorId;
+
+/**
+ * 单条记录是否在主体的数据范围内。
+ *
+ * [重要] 列表过滤和单条访问**必须都做**。只做列表是经典漏洞:
+ * 列表里看不到那一行,但知道 id 就能直接 GET /users/:id 把它读出来,
+ * 甚至 POST /users/:id/update 改掉它。
+ *
+ * createdBy 为 null(seed 灌的内置数据)时,只有不受限的主体能访问 ——
+ * 「无主数据」不属于任何人,SELF 主体看不到它是正确行为。
+ */
+export const isInDataScope = (createdBy: string | null, actor: ActorContext): boolean => {
+  const owner = scopeOwnerOf(actor);
+  return owner === undefined || createdBy === owner;
+};
 
 /** 多角色合并的输入形状。 */
 export interface RoleGrant {

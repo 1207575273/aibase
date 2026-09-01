@@ -32,7 +32,7 @@ export const buildUserRoutes = (deps: UserRoutesDeps): Hono<AppEnv> => {
     validate('query', UserListQuerySchema),
     async (c) => {
       const query = c.req.valid('query');
-      const page = await deps.service.list(query);
+      const page = await deps.service.list(query, getActor(c));
       const body: UserListResponse = toPageWire(page, query, toUserWire);
       return c.json(body);
     },
@@ -52,7 +52,7 @@ export const buildUserRoutes = (deps: UserRoutesDeps): Hono<AppEnv> => {
   // ── :id 路由,排在固定路径之后 ──
 
   app.get('/:id', requirePermission('user:read'), async (c) => {
-    const user = await deps.service.get(c.req.param('id'));
+    const user = await deps.service.get(c.req.param('id'), getActor(c));
     const body: UserWire = toUserWire(user);
     return c.json(body);
   });

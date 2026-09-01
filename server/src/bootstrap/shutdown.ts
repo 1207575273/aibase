@@ -2,7 +2,7 @@
  * 优雅关闭 + 进程级异常兜底。
  *
  * 解决什么问题:
- * - 姊妹项目的 shutdown **从不调用 server.close()**(grep 零命中),
+ * - 曾见过的一个项目的 shutdown **从不调用 server.close()**(grep 零命中),
  *   收到 SIGTERM 后直接 process.exit —— 在途请求被当场掐断,
  *   用户看到的是"连接被重置"。容器滚动更新时每次都会有一批请求失败。
  * - 它也**零处** unhandledRejection / uncaughtException 监听。

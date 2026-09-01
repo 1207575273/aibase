@@ -1,7 +1,7 @@
 /**
  * HTTP 客户端 —— 全前端唯一 import axios 的地方(eslint R5 守着)。
  *
- * 干什么: 单实例 + 拦截器,统一处理 baseURL、Cookie 携带、错误归一化、401 跳登录。
+ * 干什么: 单实例 + 拦截器,统一处理 baseURL、令牌携带、错误归一化、401 跳登录。
  *
  * 解决什么问题:
  * - 业务代码里零 `.then(r => r.data)`、零 AxiosResponse 泄漏 —— 换 HTTP 库只改这一个文件。
@@ -53,11 +53,12 @@ export const setUnauthenticatedHandler = (handler: () => void): void => {
 /**
  * API 基地址。
  *
- * `import.meta.env.BASE_URL` 是 vite 从 ports.json 的 contextPath 算出来的
- * (见 vite.config.ts 的 base),形态固定是 '/' 或 '/app/' —— 带尾斜杠。
+ * `import.meta.env.BASE_URL` 是 vite 从 `.env` 的 CONTEXT_PATH 算出来的
+ * (见 vite.config.ts 的 base,它 import scripts/ports.mjs),
+ * 形态固定是 '/' 或 '/app/' —— 带尾斜杠。
  * 拼上 'api' 就得到 '/api' 或 '/app/api',与后端的 config.apiPrefix 一致。
  *
- * 这样前端代码里**不出现任何硬编码前缀**:启用 contextPath 时改 ports.json 一处,
+ * 这样前端代码里**不出现任何硬编码前缀**:启用 contextPath 时改 `.env` 一处,
  * 打包产物路径、路由前缀、API 地址三者自动对齐。
  */
 const API_BASE = `${import.meta.env.BASE_URL}api`;

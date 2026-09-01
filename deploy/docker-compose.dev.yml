@@ -1,0 +1,53 @@
+# 开发/测试用的 PostgreSQL —— 只起数据库,应用还是本机 `pnpm dev` 跑。
+#
+# 为什么单独一个文件而不是复用生产的 compose:
+#   生产那份要起 nginx + app + migrate + pg 四个服务,开发时只需要 pg
+#   (应用跑在本机才有热重载和断点)。混在一个文件里靠 profile 区分,
+#   结果就是每次都要记得带 --profile,忘了就起了一堆不需要的容器。
+#
+# 用法:
+#   docker compose -f deploy/docker-compose.dev.yml up -d      # 起
+#   docker compose -f deploy/docker-compose.dev.yml down       # 停(保留数据)
+#   docker compose -f deploy/docker-compose.dev.yml down -v    # 停并删库
+#
+# `pnpm dev` 会自动检测它在不在、不在就拉起来(见 scripts/dev.mjs),
+# 所以正常开发不需要手敲这些命令。
+
+# [必须显式声明项目名] docker compose 的默认项目名取自**所在目录名**,
+# 而生产的 docker-compose.prod.yml 也在 deploy/ 下 —— 两者会共用项目名 "deploy"。
+# 后果是实打实踩到过的: 对生产栈执行 `down -v`,会把这个开发数据库容器
+# 一起停掉删掉(同一个项目下的容器被视作一组)。在生产机上更危险。
+# 显式命名之后两个栈完全隔离,互相看不见。
+name: keel-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: keel-dev-postgres
+    environment:
+      POSTGRES_USER: keel
+      POSTGRES_PASSWORD: keel_dev_password
+      POSTGRES_DB: keel_dev
+      # 测试会频繁 CREATE DATABASE ... TEMPLATE,给足权限
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      # 用项目自己的 71xx 号段(后端 7101 / 前端 7102 / 数据库 7103),
+      # 而不是默认 5432 或常见的 15432。
+      # [实测] 一开始写的 15432 直接撞上了本机另一个项目的 PG 容器 ——
+      # 撞端口的症状是"连上了但表都不对",比连不上难查得多。
+      # 一台开发机上跑多个项目是常态,端口必须按项目分段。
+      - '7103:5432'
+    volumes:
+      - keel-dev-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # dev.mjs 靠它判断"数据库能用了没",不能只看容器 Up ——
+      # 容器起来到 PG 真正接受连接之间有几秒空窗
+      test: ['CMD-SHELL', 'pg_isready -U keel -d keel_dev']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  keel-dev-pgdata:

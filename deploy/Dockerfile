@@ -8,11 +8,12 @@
 FROM node:22-slim AS deps
 WORKDIR /app
 
-# better-sqlite3 是原生模块,某些平台没有预编译产物时需要现场编译
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
-
+# [不需要编译工具链] 这里曾经装着 python3 / make / g++,因为 better-sqlite3 是
+# 原生模块,在没有预编译产物的平台上要现场 node-gyp 编译。
+# 换成 PostgreSQL 之后驱动是纯 JS 的 `pg`,全部依赖都不需要编译 ——
+# 装那三个包白白拖慢每次冷构建、也把镜像层撑大。
+# 加依赖时如果又引入了原生模块(会在 pnpm install 阶段报 node-gyp 错),
+# 先想想有没有纯 JS 替代,再考虑把工具链加回来。
 RUN corepack enable
 
 # 只复制依赖清单 —— 业务代码变了不会让这一层缓存失效,重建快很多
@@ -38,6 +39,24 @@ COPY . .
 RUN pnpm exec prisma generate \
  && pnpm -r --parallel build
 
+# 生成**自包含**的部署目录 —— 这是 pnpm 官方为容器部署提供的命令。
+#
+# 为什么不能直接 COPY node_modules(踩过):
+#   pnpm 的 workspace 布局是软链构成的 —— 根 node_modules 里只有根的
+#   devDependencies 加一个隐藏的 .pnpm store,运行时依赖都软链在
+#   server/node_modules 下,原生模块的 .node 文件还藏在 .pnpm 深处。
+#   手工 COPY 这些目录得同时搬对三处相对结构,少一处就是运行期
+#   `Cannot find package 'zod'` ——
+#   而且**镜像照样 build 成功**,只在 docker run 时才炸。
+#   pnpm deploy 直接把依赖从 store 实体化成扁平目录,没有这些坑。
+#
+# --legacy: pnpm 10 默认要求 workspace 开 inject-workspace-packages,
+#   那会改变本地开发时 workspace 包的链接方式(改 contracts 得重新 install 才生效)。
+#   为了部署去牺牲开发体验不划算 —— --legacy 只影响这一条命令。
+# --prod: 不带 devDependencies。所以 prisma CLI 在 server 的 dependencies 里,
+#   容器要自己跑 migrate deploy,它就是这个部署单元的运行时依赖。
+RUN pnpm deploy --filter=@app/server --prod --legacy /out
+
 # ── 阶段 3:运行时 ──────────────────────────────────────────────
 FROM node:22-slim AS runtime
 
@@ -50,35 +69,59 @@ WORKDIR /app
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
-    PORT=${APP_PORT} \
-    # 数据库放挂载卷里,容器重建不丢数据
-    DATABASE_URL=file:/data/app.db \
-    # 后端同时托管前端静态资源,单进程单端口
-    SERVE_WEB=web/dist
+    PORT=${APP_PORT}
+#
+# [没有 DATABASE_URL 默认值] 连接串由 compose 注入,镜像里不写死 ——
+#   给默认值会让"忘了配"变成"连到了某个意外的库",而迁移是破坏性操作。
+# [没有 SERVE_WEB] 后端不再托管前端,静态资源归 nginx 容器。
+#   数据也不再放容器内的卷: 数据库是独立的 postgres 服务,这个容器无状态。
 
-RUN corepack enable
+# [注意] runtime 阶段**不装 pnpm/corepack**。依赖已经是 pnpm deploy 产出的
+# 扁平目录,启动脚本直接调 node 与 node_modules/.bin/prisma,不需要包管理器。
+# 少装一样东西就少一份攻击面和镜像体积。
 
-# 后端产物是 esbuild 打的单文件,但 prisma CLI(跑迁移用)和
-# better-sqlite3(原生模块)必须带上
-COPY --from=build /app/node_modules ./node_modules
+# 依赖来自 pnpm deploy 的产物(扁平、自包含、无软链),不是手工拼的 node_modules
+COPY --from=build /out/node_modules ./node_modules
+# 后端产物是 esbuild 打的单文件: main.js 跑服务,seed.js 灌种子
 COPY --from=build /app/server/dist ./server/dist
+# Prisma 的生成物与迁移文件 —— migrate deploy 要读 migrations,client 要读 generated
 COPY --from=build /app/server/src/generated ./server/src/generated
 COPY --from=build /app/server/prisma ./server/prisma
-COPY --from=build /app/web/dist ./web/dist
-COPY --from=build /app/packages ./packages
-COPY package.json pnpm-workspace.yaml prisma.config.ts ports.json ./
+# pnpm-workspace.yaml 不是给 pnpm 用的,是 config/index.ts 定位 REPO_ROOT 的锚点
+# (向上找第一个含它的目录),删了会让所有相对路径解析错位
+COPY package.json pnpm-workspace.yaml prisma.config.ts ./
+COPY deploy/start.sh ./start.sh
+COPY deploy/start-migrate.sh ./start-migrate.sh
+# 显式加执行位: 构建 context 来自 Windows 时文件权限不可靠,不能赌 COPY 进来的恰好可执行
+RUN chmod +x ./start.sh ./start-migrate.sh
 
 # 用非 root 跑。node 镜像自带 node 用户(uid 1000)
-RUN mkdir -p /data && chown -R node:node /data /app
+RUN chown -R node:node /app
 USER node
 
-VOLUME ["/data"]
+# [没有 VOLUME] 这个容器是**无状态**的 —— 数据在独立的 postgres 服务里,
+# 日志走 stdout 交给 docker 采集。可以随时杀掉重建,也可以水平扩多个实例。
+# SQLite 时代这里挂着 /data 存库文件,那也是它没法多实例的根本原因。
 EXPOSE ${APP_PORT}
 
-# 容器编排会用它判断实例是否可用。/health 是真探活(会 ping 数据库)
+# 容器编排会用它判断实例是否可用。/health 是真探活(会 ping 数据库)。
+#
+# [坑] 这里**不能用 ${APP_PORT}**。那是 build ARG,只在构建期存在;
+# 而 HEALTHCHECK 的 shell 形式 CMD 是在**容器运行时**展开变量的,
+# 运行时环境里没有 APP_PORT,于是展开成空串 —— fetch('http://127.0.0.1:/api/health')
+# 必然失败。症状极具迷惑性: 应用日志显示"服务已启动"、手工 curl 也通,
+# 唯独 docker 一直报 unhealthy。在 k8s 里这会让 pod 被反复重启。
+# 改成用 node 直接读 process.env.PORT(那是真正的运行时 ENV)。
+#
+# contextPath 也要考虑: 设了 CONTEXT_PATH=/myapp 之后 API 挂在 /myapp/api 下,
+# 健康检查得跟着走,否则同样是"应用没问题但健康检查永远失败"。
+# 这里的归一化逻辑与 config/index.ts 的 normalizeContextPath 保持同一套语义。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:${APP_PORT}/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const r=process.env.CONTEXT_PATH||'';const c=(r===''||r==='/')?'':(r.startsWith('/')?r:'/'+r).replace(/\/+$/,'');fetch('http://127.0.0.1:'+(process.env.PORT||7101)+c+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# 启动前先应用迁移 —— 保证代码与库结构永远匹配。
-# migrate deploy 是幂等的,已应用的迁移会跳过
-CMD ["sh", "-c", "pnpm exec prisma migrate deploy && node server/dist/main.js"]
+# 启动流程全在 start.sh(迁移 -> 种子 -> exec 应用),那里有完整注释。
+#
+# [关键] 必须用 exec 形式(JSON 数组)。写成 `CMD ./start.sh` 会被 docker
+# 包一层 `/bin/sh -c`,PID 1 就成了那个 sh —— 它收到 SIGTERM 不转发给子进程,
+# start.sh 里的 exec 也就白写了,优雅关闭仍然不会执行。
+CMD ["./start.sh"]

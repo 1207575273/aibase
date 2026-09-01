@@ -3,7 +3,7 @@
  *
  * 干什么: 把 Prisma 的错误码翻译成带正确 HTTP 状态的业务错误。
  * 解决什么问题:
- *   姊妹项目**全仓零处** P2002 / PrismaClientKnownRequestError 处理 ——
+ *   曾见过的一个项目**全仓零处** P2002 / PrismaClientKnownRequestError 处理 ——
  *   邮箱重复这种最常见的用户错误会以裸 Prisma 异常穿透到最外层,变成 500
  *   「服务内部错误」。用户看到的是"系统崩了",实际只是"这个邮箱有人用了"。
  *
@@ -22,28 +22,62 @@ const isKnownError = (e: unknown): e is Prisma.PrismaClientKnownRequestError =>
 /**
  * 从 P2002 的 meta 里取出撞车的字段名,用于生成"该邮箱已被使用"这类具体提示。
  *
- * [坑] 字段名的位置在 Prisma 7 的 driver adapter 下**变了**:
- *   - v6(Rust engine):    meta.target = ['email']
- *   - v7(driver adapter): meta.driverAdapterError.cause.constraint.fields = ['email']
- *   实测确认。两种都读,升级降级都不会静默失效 —— 读不到字段名的后果是
- *   409 的 code 退化成通用的 UNIQUE_VIOLATION,前端就没法针对"邮箱重复"
- *   做字段级提示了,而且这种退化不会报错,只会悄悄变难用。
+ * [坑] 字段名的位置**三种形状都不一样**,全是实测出来的:
+ *
+ *   1. Prisma v6(Rust engine)
+ *        meta.target = ['email']
+ *   2. SQLite driver adapter
+ *        meta.driverAdapterError.cause.constraint.fields = ['email']
+ *   3. **PostgreSQL driver adapter(当前用的)**
+ *        meta.driverAdapterError.cause.constraint.index = 'sys_user_username_key'
+ *        meta.driverAdapterError.cause.table          = 'sys_user'
+ *      —— 它给的是**索引名**,不是字段名。
+ *
+ * 第 3 种是从 SQLite 迁到 PG 时踩到的: 代码只读 constraint.fields,
+ * 在 PG 下永远读不到,于是所有唯一冲突都退化成通用的 UNIQUE_VIOLATION,
+ * "用户名已存在""角色码已存在"这类具体提示全部失效。
+ * 而且**不报任何错**,只是 409 的 code 变笼统了 —— 只有测试断言具体 code 才抓得住。
+ *
+ * 返回的是**候选列表**而不是单个字段名: PG 那条路要从索引名反推字段名
+ * (Prisma 的命名规则是 `{table}_{field}_key`),复合唯一索引反推不准,
+ * 所以把原始索引名也一并返回,让调用方两种 key 都能登记。
  */
 const targetFields = (e: Prisma.PrismaClientKnownRequestError): string[] => {
   const meta = e.meta as
     | {
         target?: unknown;
-        driverAdapterError?: { cause?: { constraint?: { fields?: unknown } } };
+        driverAdapterError?: {
+          cause?: {
+            table?: unknown;
+            constraint?: { fields?: unknown; index?: unknown };
+          };
+        };
       }
     | undefined;
 
-  // v7 driver adapter 形状
-  const adapterFields = meta?.driverAdapterError?.cause?.constraint?.fields;
+  const cause = meta?.driverAdapterError?.cause;
+
+  // 形状 2:字段名数组,直接可用
+  const adapterFields = cause?.constraint?.fields;
   if (Array.isArray(adapterFields)) {
     return adapterFields.filter((f): f is string => typeof f === 'string');
   }
 
-  // v6 / 其他 provider 形状
+  // 形状 3:只有索引名,按 Prisma 的命名规则 {table}_{field}_key 反推字段名
+  const index = cause?.constraint?.index;
+  if (typeof index === 'string') {
+    const table = cause?.table;
+    const withoutSuffix = index.replace(/_key$/, '');
+    const field =
+      typeof table === 'string' && withoutSuffix.startsWith(`${table}_`)
+        ? withoutSuffix.slice(table.length + 1)
+        : withoutSuffix;
+
+    // 字段名排前面(mapping 通常按字段名登记),索引名兜底(复合唯一约束时用它)
+    return field === '' ? [index] : [field, index];
+  }
+
+  // 形状 1:v6 / 其他 provider
   const target = meta?.target;
   if (Array.isArray(target)) return target.filter((t): t is string => typeof t === 'string');
   if (typeof target === 'string') return [target];

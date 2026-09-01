@@ -12,9 +12,9 @@ import type { Logger } from '../domain/shared/logger.js';
 import type { UnitOfWork } from '../domain/shared/unit-of-work.js';
 import { uuidGenerator } from '../infrastructure/ids/uuid-generator.js';
 import { createLogger } from '../infrastructure/logger/pino-logger.js';
-import { createPrismaClient } from '../infrastructure/persistence/sqlite/prisma-client.js';
-import type { PrismaClient } from '../infrastructure/persistence/sqlite/prisma.js';
-import { PrismaUnitOfWork } from '../infrastructure/persistence/sqlite/unit-of-work.js';
+import { createPrismaClient } from '../infrastructure/persistence/postgres/prisma-client.js';
+import type { PrismaClient } from '../infrastructure/persistence/postgres/prisma.js';
+import { PrismaUnitOfWork } from '../infrastructure/persistence/postgres/unit-of-work.js';
 
 export interface AppContext {
   prisma: PrismaClient;
@@ -31,8 +31,8 @@ export interface AppContext {
 }
 
 export interface CreateContextOptions {
-  /** 覆盖数据库路径。测试用 —— 生产走 config。 */
-  dbPath?: string;
+  /** 覆盖数据库连接串。测试用 —— 生产走 config。 */
+  connectionString?: string;
   /** 覆盖 logger。测试里可以传一个静默实现,免得测试输出被日志刷屏。 */
   logger?: Logger;
   clock?: Clock;
@@ -57,7 +57,7 @@ export const createContext = async (options: CreateContextOptions = {}): Promise
         });
 
   const prisma = await createPrismaClient({
-    dbPath: options.dbPath ?? config.dbPath,
+    connectionString: options.connectionString ?? config.databaseUrl,
     verbose: !config.isProduction,
   });
 

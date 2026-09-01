@@ -53,6 +53,15 @@ export class PrismaRoleRepository implements RoleRepository {
     return row === null ? null : toEntity(row);
   }
 
+  async findByIds(ids: readonly string[]): Promise<Role[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.db.role.findMany({
+      where: { id: { in: [...ids] } },
+      include: ROLE_INCLUDE,
+    });
+    return rows.map(toEntity);
+  }
+
   async findByCode(code: string): Promise<Role | null> {
     const row = await this.db.role.findUnique({ where: { code }, include: ROLE_INCLUDE });
     return row === null ? null : toEntity(row);
@@ -60,7 +69,7 @@ export class PrismaRoleRepository implements RoleRepository {
 
   async list(filter: RoleListFilter): Promise<Page<RoleWithUserCount>> {
     const where = buildWhere(filter);
-    // 两次独立查询,不包同一快照 —— 理由见 person.repository.ts 的同位置说明。
+    // 两次独立查询,不包同一快照 —— 理由见 user.repository.ts 的 list() 同位置说明。
     const [rows, total] = await Promise.all([
       this.db.role.findMany({
         where,
@@ -130,6 +139,8 @@ const buildWhere = (filter: RoleListFilter): PrismaTypes.RoleWhereInput => {
   if (filter.keyword !== undefined && filter.keyword !== '') {
     where.OR = [{ code: { contains: filter.keyword } }, { name: { contains: filter.keyword } }];
   }
+  // 行级数据权限。findMany 与 count 共用,分页总数同口径。
+  if (filter.scopeOwnerId !== undefined) where.createdBy = filter.scopeOwnerId;
   return where;
 };
 

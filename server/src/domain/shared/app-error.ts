@@ -4,14 +4,14 @@
  * 干什么: 承载「业务上出了什么事」+「HTTP 上该回什么码」,由 interface 层的
  *         app.onError 统一翻译成响应体。
  * 解决什么问题:
- * - 姊妹项目 work_nm_tp 有 **6 套并存的错误类型**(DomainError 家族 / AppError /
+ * - 曾见过的一个项目有 **6 套并存的错误类型**(DomainError 家族 / AppError /
  *   TaskAppError / AgentAppError / ChatSessionAppError / WebToolError),其中只有一个
  *   继承了公共基类,导致 interface 层必须按具体类 instanceof 分流,同一个 404
  *   有好几条完全不同的产生路径。更糟的是它 domain/shared/errors.ts 里那个"共享"的
  *   ErrorCode 闭合联合里全是 WORKFLOW_*,NotFoundError 的默认码直接写死
  *   'WORKFLOW_NOT_FOUND' —— 名为 shared 实为某个业务域的私货。
  * - **httpStatus 直接挂在错误上**,而不是在 interface 层维护一张 code -> status 映射表。
- *   姊妹项目那张表被复制了 11 份且已经互相漂移,其中一份的默认分支是 400 ——
+ *   曾见过的一个项目那张表被复制了 11 份且已经互相漂移,其中一份的默认分支是 400 ——
  *   意味着任何未登记的错误码都被当成"用户参数错",真正的内部故障被静默降级,
  *   监控完全看不见。挂在错误上就不存在"忘了登记"这件事。
  *
@@ -76,7 +76,7 @@ export const internal = (message: string, details?: unknown): AppError =>
 /**
  * 「查不到就抛 404」的样板收敛。
  *
- * 姊妹项目 application 层有 69 处手写的「取实体 -> 判 null -> throw」,
+ * 曾见过的一个项目里,application 层有 69 处手写的「取实体 -> 判 null -> throw」,
  * 每处 4 行,全是仪式。这个助手把它压成一行。
  *
  * @example

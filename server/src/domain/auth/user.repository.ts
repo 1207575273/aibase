@@ -22,6 +22,14 @@ export interface UserListFilter extends PageParams {
   /** 同时匹配 username 与 displayName,大小写不敏感。空/未传则不过滤。 */
   keyword?: string | undefined;
   status?: UserStatus | undefined;
+  /**
+   * 行级数据权限的过滤锚点:只返回 createdBy 等于它的行。
+   * undefined = 不限制(主体是超管或 dataScope=ALL)。
+   *
+   * 由 Service 用 domain/auth/actor.ts 的 scopeOwnerOf(actor) 算出来后传入 ——
+   * Repository 不认识"主体",只认识"按 createdBy 过滤"。
+   */
+  scopeOwnerId?: string | undefined;
 }
 
 export interface UserRepository {
@@ -52,6 +60,8 @@ export interface UserRepository {
   /**
    * 分页列表,按 createdAt 倒序(新建的排前面)。
    * roleIds 为空数组的用户也要返回,不能因为 join 不到角色就漏掉。
+   * filter.scopeOwnerId 有值时必须按 createdBy 过滤 —— total 也要同口径,
+   * 否则会出现"列表 0 条但总数 37"的穿帮。
    */
   list(filter: UserListFilter): Promise<Page<UserWithRoles>>;
 
@@ -69,8 +79,8 @@ export interface UserRepository {
   replaceRoles(userId: string, roleIds: readonly string[]): Promise<void>;
 
   /**
-   * 硬删除。关联的 user_role / session 由数据库外键 onDelete: Cascade 自动清理。
-   * (本模板恢复了 DB 外键 —— 姊妹项目全库禁用外键后每个 delete 都要人肉断链,
+   * 硬删除。关联的 user_role 由数据库外键 onDelete: Cascade 自动清理。
+   * (本模板恢复了 DB 外键 —— 曾见过的一个项目全库禁用外键后每个 delete 都要人肉断链,
    *  忘了就是悬空引用且 SQLite 不报错。)
    */
   delete(id: string): Promise<void>;

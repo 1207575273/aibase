@@ -1,6 +1,18 @@
 @import 'tailwindcss';
 
 /*
+ * shadcn 组件用的进出场动画类(animate-in / fade-in-0 / zoom-in-95 / slide-in-from-*)。
+ *
+ * [注意] 这一行不能省。dialog / dropdown-menu / select 三个组件的 className 里
+ * 已经写着这些类,少了它们**不会报错**,只是所有弹出层变成瞬间出现瞬间消失 ——
+ * 看起来像"没做动画",而不像"少装了个库",所以很难往依赖上想。
+ *
+ * 为什么是 tw-animate-css 而不是 tailwindcss-animate:
+ * 后者只支持 Tailwind v3 的 plugin 机制,v4 改成 CSS-first 之后官方推荐换成它。
+ */
+@import 'tw-animate-css';
+
+/*
  * Tailwind v4 主题。
  *
  * ── 为什么是「CSS 变量 + @theme inline 转发」这个两段式写法 ──────

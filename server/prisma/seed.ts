@@ -14,7 +14,7 @@
 import { PERMISSION_CODES } from '@app/contracts';
 import { randomBytes } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
-import { createPrismaClient } from '../src/infrastructure/persistence/sqlite/prisma-client.js';
+import { createPrismaClient } from '../src/infrastructure/persistence/postgres/prisma-client.js';
 import { ScryptPasswordHasher } from '../src/infrastructure/security/scrypt-password-hasher.js';
 import { config } from '../src/config/index.js';
 
@@ -24,7 +24,7 @@ const ADMIN_USERNAME = 'admin';
 
 
 const main = async (): Promise<void> => {
-  const prisma = await createPrismaClient({ dbPath: config.dbPath });
+  const prisma = await createPrismaClient({ connectionString: config.databaseUrl });
   const hasher = new ScryptPasswordHasher();
   const now = new Date();
 
@@ -64,10 +64,10 @@ const main = async (): Promise<void> => {
     },
   });
 
-  // 只读角色的权限:只给 person:read。
-  // 用 upsert 逐条写而不是 createMany + skipDuplicates ——
-  // skipDuplicates 是 PostgreSQL/MySQL 才支持的选项,SQLite 下会直接报
-  // "Unknown argument"。这是切换数据库时会踩到的一类差异。
+  // 只读角色的权限:只给 user:read。
+  // 用 upsert 逐条写而不是 createMany + skipDuplicates:PG 是支持 skipDuplicates 的,
+  // 但这里要的语义是"存在就跳过、不存在就建",upsert 表达得更直接,
+  // 而且条数是个位数,批量插没有性能意义。
   for (const code of ['user:read'] as const) {
     await prisma.rolePermission.upsert({
       where: { roleId_code: { roleId: viewerRole.id, code } },

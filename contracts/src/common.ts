@@ -27,7 +27,7 @@ export type IsoDateString = string;
 // ── 分页 ──────────────────────────────────────────────────────────
 //
 // [硬约束] 任何列表端点都必须分页,不得无上限返回全表。
-// 姊妹项目 work_nm_tp 没有这条,结果全项目零处 page/size,ListEnvelope.total
+// 缺了这条的话,结果全项目零处 page/size,ListEnvelope.total
 // 一律等于 items.length —— 是个会主动误导消费方"以为有分页"的假信封。
 
 /** 单页最大条数。防御性上限:客户端传 size=99999 时截断而不是拖垮数据库。 */
@@ -85,7 +85,7 @@ export interface CreatedIdResponse {
  *
  * traceId: 每个响应都会带,与服务端日志里的同名字段一一对应。
  *   用户报障时把它读出来,就能直接定位到那一次请求的完整日志。
- *   (姊妹项目声明了这个字段但从未填过,等于没有 —— 本模板由中间件强制填充。)
+ *   (曾见过的一个项目声明了这个字段但从未填过,等于没有 —— 本模板由中间件强制填充。)
  */
 export interface ErrorResponse {
   code: string;
@@ -99,7 +99,7 @@ export interface ErrorResponse {
 /**
  * 所有业务实体在 wire 上都带的审计字段。
  *
- * [硬约束] 每张业务表都必须有这四个字段。姊妹项目 38 张表里 0 张有 createdBy,
+ * [硬约束] 每张业务表都必须有这四个字段。曾见过的一个项目里,38 张表没有一张有 createdBy,
  * 导致后来想加权限时发现「谁创建的」这条信息根本不存在,只能改 schema 重来。
  * 宁可一开始就带上。
  */

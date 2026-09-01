@@ -12,7 +12,7 @@
  *
  * [代价] 仓储里不能再用 `this.db.$transaction([...])`(事务客户端没有这个方法)。
  *   列表查询要"findMany 与 count 同快照"时,改用 Prisma 的批量读写法或接受
- *   两次独立查询 —— 见 person.repository.ts 里的说明。
+ *   两次独立查询 —— 见 user.repository.ts 的 list() 里的说明。
  */
 import type { Prisma } from './prisma.js';
 

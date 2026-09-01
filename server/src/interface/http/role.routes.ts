@@ -32,7 +32,7 @@ export const buildRoleRoutes = (deps: RoleRoutesDeps): Hono<AppEnv> => {
     validate('query', RoleListQuerySchema),
     async (c) => {
       const query = c.req.valid('query');
-      const page = await deps.service.list(query);
+      const page = await deps.service.list(query, getActor(c));
       const body: RoleListResponse = toPageWire(page, query, toRoleWire);
       return c.json(body);
     },
@@ -65,7 +65,7 @@ export const buildRoleRoutes = (deps: RoleRoutesDeps): Hono<AppEnv> => {
   // ── :id 路由 ──
 
   app.get('/:id', requirePermission('role:read'), async (c) => {
-    const role = await deps.service.get(c.req.param('id'));
+    const role = await deps.service.get(c.req.param('id'), getActor(c));
     const body: RoleWire = toRoleDetailWire(role);
     return c.json(body);
   });

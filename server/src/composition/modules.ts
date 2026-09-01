@@ -4,7 +4,7 @@
  * 干什么: 每个业务模块一个 buildXxxModule(ctx) 函数,返回它的路由依赖。
  *
  * 解决什么问题:
- *   姊妹项目 work_nm_tp 的 main.ts 有 **1173 行**(300 行 import + 665 行连续的 new),
+ *   曾见过的一个项目的 main.ts 有 **1173 行**(300 行 import + 665 行连续的 new),
  *   一个函数里塞了 12 个域的装配。它自定的"装配 >200 行才考虑拆"的触发条件
  *   用了个 AND 把自己豁免掉了,实际早已 5 倍超标。
  *
@@ -19,7 +19,7 @@ import { AuthService } from '../application/auth/auth.service.js';
 import { RoleService } from '../application/role/role.service.js';
 import { UserService } from '../application/user/user.service.js';
 import { config } from '../config/index.js';
-import { buildRepos } from '../infrastructure/persistence/sqlite/unit-of-work.js';
+import { buildRepos } from '../infrastructure/persistence/postgres/unit-of-work.js';
 import { ScryptPasswordHasher } from '../infrastructure/security/scrypt-password-hasher.js';
 import { Hs256TokenSigner } from '../infrastructure/security/hs256-token-signer.js';
 import { RsaLoginCrypto } from '../infrastructure/security/rsa-login-crypto.js';
@@ -97,7 +97,6 @@ export const buildModules = async (
         return false;
       }
     },
-    allowedOrigins: config.allowedOrigins,
     bodyLimitBytes: config.bodyLimitBytes,
     loginRateLimit: {
       limit: config.loginRateLimit,

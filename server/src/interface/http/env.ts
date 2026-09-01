@@ -19,7 +19,6 @@ export interface AppEnv {
     logger: Logger;
     /** 当前主体。只有经过 authenticate 中间件的路由才有。 */
     actor?: ActorContext;
-    /** 当前会话 id。改密时用来保留当前设备。 */
   };
 }
 

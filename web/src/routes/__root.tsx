@@ -6,7 +6,7 @@
  *   2. errorComponent(渲染期异常兜底)
  *   3. notFoundComponent(404 页)
  *
- * 后两个是姊妹项目完全缺失的 —— 它全仓 grep 不到 errorComponent /
+ * 后两个是曾见过的一个项目完全缺失的 —— 它全仓 grep 不到 errorComponent /
  * ErrorBoundary,任何一个组件抛错就是**整页白屏**,用户只看到空白,
  * 控制台的报错也不会有人去看。
  */

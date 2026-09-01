@@ -2,7 +2,7 @@
  * 分页的领域侧表示。
  *
  * 干什么: Repository 的列表方法一律收 PageParams、返回 Page<T>。
- * 解决什么问题: 姊妹项目的 Repository 全是 listAll() / listByPeriod() 这类
+ * 解决什么问题: 曾见过的一个项目的 Repository 全是 listAll() / listByPeriod() 这类
  *   无上限方法,全项目零处 skip/take,数据一多就是一次性拉全表 + 前端卡死。
  *
  * [硬约束] Repository 接口里**不允许**出现返回全量数组的列表方法。

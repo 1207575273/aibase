@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
  *
  * 与后端单测的区别: 这里起的是**真实服务进程**,走真实 HTTP,打真实数据库文件。
  * 覆盖的是单测覆盖不到的东西 —— 进程启动、配置加载、中间件顺序、
- * Cookie 往返、真实网络层的行为。
+ * 响应头往返、真实网络层的行为。
  */
 export default defineConfig({
   test: {

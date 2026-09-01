@@ -16,7 +16,12 @@ export interface ApiResult<T> {
 
 export interface RequestOptions {
   token?: string | undefined;
-  /** 原样发送的 Cookie 头,用于验证 Cookie 认证通道。 */
+  /**
+   * 原样发送的 Cookie 头。
+   *
+   * 登录态**不走 Cookie**,保留这个口子是为了能写"就算带了 Cookie 也不该被当成
+   * 凭证"这类反向断言 —— 哪天有人把 Cookie 认证加回来,测试要能发现。
+   */
   cookie?: string | undefined;
   headers?: Record<string, string> | undefined;
 }
@@ -56,7 +61,10 @@ export const api = {
     request<T>('POST', path, body, options),
 };
 
-/** 登录并返回 token 与原始的 Set-Cookie(用于验证两条认证通道)。 */
+/**
+ * 登录并返回 token,以及响应里的 Set-Cookie 原值。
+ * 后者正常应当是 null —— auth.e2e.ts 有一条用例专门断言它,防止 Cookie 认证被加回来。
+ */
 export const login = async (
   username: string,
   password: string,

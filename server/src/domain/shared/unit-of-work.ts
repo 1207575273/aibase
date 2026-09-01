@@ -5,7 +5,7 @@
  *         而不需要知道底层是 Prisma 的 $transaction 还是别的什么。
  *
  * 解决什么问题:
- *   姊妹项目 work_nm_tp 的 20 处 $transaction **全部**在 infrastructure 内部,
+ *   曾见过的一个项目的 20 处 $transaction **全部**在 infrastructure 内部,
  *   application 层拿到的只是一个个独立的 repo 接口 —— 跨聚合写(先写 A 再写 B)
  *   根本无法原子化。为了绕开这一点,它把「删 Task 时顺带删 TaskNote、
  *   把 DayLog.taskId 置 null」这种**业务级联规则硬塞进了 PrismaTaskRepository.delete()**。
@@ -18,7 +18,7 @@
  * ```ts
  * await this.deps.uow.run(async (repos) => {
  *   await repos.user.update(id, patch);
- *   await repos.session.deleteAllByUserId(id);   // 禁用用户就得踢掉他所有会话
+ *   await repos.user.replaceRoles(id, roleIds);   // 改用户 + 换角色必须一起成功
  * });
  * ```
  * 回调里拿到的 repos 是**绑定在同一个事务上**的仓储实例。用外面那份(非事务的)

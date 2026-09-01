@@ -37,6 +37,24 @@ export const PUBLIC_PATHS = [
   '/auth/login-challenge',
 ] as const;
 
+/**
+ * 「已登录即可,不需要任何权限码」的路径。
+ *
+ * 为什么要显式列出来: app.test.ts 的**授权回归**用一个零权限账号遍历所有受保护路由,
+ * 断言全部返回 403。这几条是有意不挂 requirePermission 的 ——
+ * 每个登录用户都得能登出、看自己是谁、改自己的密码、拿权限目录渲染界面。
+ * 没有这份清单,测试就分不清"故意不挂"和"忘了挂",而后者的后果是
+ * 任何登录用户都能调那个接口,且**不报错、测试照样绿**。
+ *
+ * 往这里加路径与往 PUBLIC_PATHS 加一样,是需要过安全评审的显眼改动。
+ */
+export const AUTHENTICATED_ONLY_PATHS = [
+  '/auth/logout',
+  '/auth/me',
+  '/auth/change-password',
+  '/auth/permission-catalog',
+] as const;
+
 export interface AppDeps {
   auth: AuthRoutesDeps;
   user: UserRoutesDeps;
@@ -45,7 +63,6 @@ export interface AppDeps {
   version: string;
   /** 健康检查用:探活数据库。返回 false 表示数据库不可用。 */
   pingDb: () => Promise<boolean>;
-  allowedOrigins: readonly string[];
   bodyLimitBytes: number;
   loginRateLimit: LoginRateLimitOptions;
   startedAt: Date;
@@ -60,13 +77,16 @@ export const buildApp = (deps: AppDeps): Hono<AppEnv> => {
   app.use('*', requestContext(deps.logger));
   // 2. 请求体上限:在解析 body 之前拦掉超大请求,防一个大 JSON 打爆内存
   app.use('*', bodyLimit({ maxSize: deps.bodyLimitBytes }));
-  // 3. Origin 守卫:Cookie 认证下这是 CSRF 主防线,必须在所有写路由之前
+  //
+  // [没有第 3 条] 这里曾经有 origin 守卫做 CSRF 防线。登录态改成
+  // JWT + Authorization 头后凭证不再被浏览器自动携带,跨站页面发的请求
+  // 带不上这个头,CSRF 天然不成立,守卫连同 allowedOrigins 配置一起删了。
 
   // ══ 公开区 ══ 只放这三样。往这里加任何东西都要过安全评审。
 
   app.get('/health', async (c) => {
     // 真探活,不是返回一个写死的 ok ——
-    // 姊妹项目的 /health 只返回静态 {status:'ok'},数据库文件被删/锁死时照样绿,
+    // 曾见过的一个项目的 /health 只返回静态 {status:'ok'},数据库文件被删/锁死时照样绿,
     // 健康检查等于没有。
     const dbOk = await deps.pingDb();
     const body = {

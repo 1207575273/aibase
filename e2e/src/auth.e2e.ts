@@ -2,9 +2,9 @@
  * 认证链路 e2e。
  *
  * 这里验的是**只有真进程 + 真 HTTP 才能验到**的东西:
- *   - Set-Cookie 的属性(HttpOnly / SameSite / Path)真的写对了
- *   - Cookie 与 Bearer 两条认证通道都能用
- *   - 登出后 token 真的失效(而不是只在内存里标记了一下)
+ *   - 登录响应里确实**没有** Set-Cookie(反向护栏,见下方用例)
+ *   - Bearer 令牌在真实网络往返下能用
+ *   - 错误响应的形状、状态码在经过 Node HTTP 层之后仍然正确
  */
 
 import { describe, expect, it } from 'vitest';

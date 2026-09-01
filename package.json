@@ -14,11 +14,13 @@
     "dev:server": "pnpm --filter @app/server dev",
     "dev:web": "pnpm --filter @app/web dev",
     "kill": "node scripts/kill.mjs",
+    "db:up": "docker compose -f deploy/docker-compose.dev.yml up -d --wait",
+    "db:down": "docker compose -f deploy/docker-compose.dev.yml down",
     "build": "pnpm -r --parallel build",
     "start": "node server/dist/main.js",
     "typecheck": "pnpm -r --parallel typecheck",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
-    "test": "pnpm --filter @app/server test",
+    "test": "pnpm -r --filter @app/server --filter @app/contracts test",
     "test:changed": "pnpm --filter @app/server exec vitest run --changed HEAD",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -43,15 +45,13 @@
     "onlyBuiltDependencies": [
       "@prisma/client",
       "@prisma/engines",
-      "better-sqlite3",
       "esbuild",
       "prisma"
     ],
     "overrides": {
       "prisma": "7.10.0",
       "@prisma/client": "7.10.0",
-      "@prisma/adapter-better-sqlite3": "7.10.0",
-      "better-sqlite3": "12.11.1"
+      "@prisma/adapter-pg": "7.10.0"
     }
   }
 }

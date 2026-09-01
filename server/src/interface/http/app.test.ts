@@ -11,7 +11,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PUBLIC_PATHS } from './app.js';
+import { AUTHENTICATED_ONLY_PATHS, PUBLIC_PATHS } from './app.js';
 import { authed, setupTestApp, type TestApp } from '../../../tests/helpers/test-app.js';
 
 describe('buildApp', () => {
@@ -127,6 +127,62 @@ describe('buildApp', () => {
       leaked,
       `以下端点缺少认证保护(应挂到 secured 子 app 上):\n${leaked.join('\n')}`,
     ).toEqual([]);
+  });
+
+  /**
+   * ★ 授权回归。与上面那条默认拒绝是**一对**,缺一不可。
+   *
+   * 上面那条守的是"忘了挂 authenticate"(接口对匿名裸奔);
+   * 这条守的是"忘了挂 requirePermission"(接口对任何登录用户裸奔)。
+   *
+   * 后者更容易发生: requirePermission 是**逐路由**挂的,漏一个不会报任何错、
+   * 测试照样绿、code review 也未必看得出来 —— 症状要等到某个只读用户
+   * 把别人的数据删了才暴露。
+   *
+   * 做法与上面对称: 用一个零权限账号遍历所有已注册路由,断言全部 403。
+   * 例外只有 AUTHENTICATED_ONLY_PATHS 里那几条,它们是有意不挂的。
+   */
+  it('should_require_permission_for_every_secured_route', async () => {
+    const exempt = new Set<string>([...PUBLIC_PATHS, ...AUTHENTICATED_ONLY_PATHS]);
+
+    const routes = t.app.routes.filter((r) => r.method !== 'ALL' && !r.path.includes('*'));
+    const leaked: string[] = [];
+
+    for (const route of routes) {
+      if (exempt.has(route.path)) continue;
+
+      const path = route.path.replace(/:[^/]+/g, 'probe-id');
+
+      const res = await authed(t.app, t.nobodyToken)(path, {
+        method: route.method,
+        ...(route.method === 'POST' ? { body: '{}' } : {}),
+      });
+
+      /*
+       * 403 = 正确拒绝(已登录但无权限)。
+       *
+       * 其他状态都说明这个端点没有权限码保护:
+       *   200 显然是裸奔;
+       *   400 说明 validate 排在了 requirePermission 前面 —— 一个没权限的人
+       *       能通过错误信息的差异探测出参数结构,而且鉴权发生在解析之后;
+       *   404 说明它先查了数据库才拒绝 —— 同样是鉴权太晚。
+       */
+      if (res.status !== 403) {
+        leaked.push(`${route.method} ${route.path} -> ${res.status}`);
+      }
+    }
+
+    expect(
+      leaked,
+      `以下端点缺少权限码保护(应挂 requirePermission,或登记进 AUTHENTICATED_ONLY_PATHS):\n${leaked.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('should_allow_authenticated_only_routes_without_any_permission', async () => {
+    // 反向验证:上面那条不是"零权限账号访问什么都是 403"的假绿。
+    // /auth/me 每个登录用户都必须能调,否则前端进不了首页。
+    const res = await authed(t.app, t.nobodyToken)('/auth/me');
+    expect(res.status).toBe(200);
   });
 
   it('should_allow_public_routes_without_auth', async () => {

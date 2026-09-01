@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "后端 — Hono + Prisma 7 + SQLite,轻量 DDD 分层",
+  "description": "后端 — Hono + Prisma 7 + PostgreSQL,轻量 DDD 分层",
   "engines": {
     "node": ">=22.12"
   },
@@ -18,18 +18,19 @@
     "@app/contracts": "workspace:*",
     "@hono/node-server": "2.1.1",
     "@hono/zod-validator": "0.9.0",
-    "@prisma/adapter-better-sqlite3": "7.10.0",
+    "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
-    "better-sqlite3": "12.11.1",
     "hono": "4.13.5",
+    "pg": "8.23.0",
     "pino": "10.3.1",
     "pino-roll": "4.0.0",
+    "prisma": "7.10.0",
     "uuid": "14.0.2",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "9.6.0",
     "@types/node": "22.20.1",
+    "@types/pg": "8.23.1",
     "esbuild": "0.28.2",
     "typescript": "6.0.3",
     "vitest": "4.1.11"

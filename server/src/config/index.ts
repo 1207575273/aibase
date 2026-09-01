@@ -3,7 +3,7 @@
  *
  * 干什么: 用 zod 解析并校验全部环境变量,启动时 fail-fast,导出类型化的 config 对象。
  * 解决什么问题:
- * - 姊妹项目有 **37 处裸读 process.env 散在 16 个文件**里,没有集中校验。
+ * - 曾见过的一个项目有 **37 处裸读 process.env 散在 16 个文件**里,没有集中校验。
  *   实锤后果:同一个端口在 ports.json 写 42421、main.ts 默认值 42421、
  *   .env 与 .env.example 写 41421、origin-guard 兜底 42421 —— 四处记载三个值。
  * - 配置错误必须在**启动时**炸,而不是等到某个冷门代码路径第一次执行才发现。
@@ -17,9 +17,6 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-// 纯函数,零 IO —— 只读 os.networkInterfaces()。与启动横幅列地址用的是同一份实现,
-// 避免"白名单放行的 IP"和"打印出来让人访问的 IP"两边算法漂移。
-import { lanIPv4 } from '../infrastructure/system/access-urls.js';
 
 /**
  * 仓库根。所有相对路径(数据库、静态资源、.env)都以它为基准。
@@ -111,13 +108,20 @@ const ConfigSchema = z.object({
   host: z.string().default('0.0.0.0'),
 
   /**
-   * 前端 dev server 端口。后端自己不监听它,但开发态要靠它拼出 vite 的 origin
-   * 加进 CSRF 白名单(见下方 devOrigins)。生产用不到。
+   * 前端 dev server 端口。后端自己不监听它,开发脚本与 vite 读同一份值,
+   * 启动横幅也要靠它打印前端地址。生产单端口部署时用不到。
    */
   webPort: z.coerce.number().int().min(1).max(65535).default(DEFAULT_WEB_PORT),
 
-  /** 相对路径以仓库根为基准,与根目录 prisma.config.ts 的约定一致。 */
-  databaseUrl: z.string().default('file:./data/app.db'),
+  /**
+   * PostgreSQL 连接串,形如 postgresql://user:pass@host:5432/dbname
+   *
+   * 没有默认值 —— **不设就拒绝启动**。
+   * 给一个 localhost 默认值看似方便,实际是把"忘了配数据库"这种错误
+   * 推迟到第一次查询才暴露,而且在生产上可能悄悄连到本机某个同名库。
+   * 开发态的值在 .env 里(指向 docker-compose.dev.yml 起的容器)。
+   */
+  databaseUrl: z.string().min(1, 'DATABASE_URL 必须设置(PostgreSQL 连接串)'),
 
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
@@ -183,25 +187,26 @@ const ConfigSchema = z.object({
   loginRateLimit: z.coerce.number().int().min(1).default(5),
   loginRateWindowMs: z.coerce.number().int().min(1000).default(60_000),
 
-  /**
-   * 额外允许的跨源(逗号分隔)。
+  /*
+   * [已删除] allowedOrigins —— 跨源白名单。
    *
-   * 生产是单端口同源部署,通常不需要配。
-   * 开发态的 vite dev server 会自动加进白名单(见下方 buildConfig),
-   * 所以这个变量只在"前端部署在另一个域名"这种非常规场景才需要设。
+   * 它是 Cookie 认证时代 origin-guard(CSRF 主防线)的配置项。登录态改成
+   * JWT + Authorization 头之后,凭证不再由浏览器自动携带,跨站页面发起的请求
+   * 带不上这个头,CSRF 天然不成立,origin-guard 连同这份白名单一起删掉了。
+   *
+   * 留着不删的危害是实打实的: 中间件已经没了,而 config 里还留着完整的
+   * zod schema + devOrigins 计算 + 一大段讲 origin-guard 踩坑的注释,
+   * 读到的人会以为系统仍有 CSRF 防护。不要因为"将来可能用得上"再加回来 ——
+   * 真需要跨源时要加的是 CORS 中间件,那是另一回事。
    */
-  allowedOrigins: z
-    .string()
-    .default('')
-    .transform((s) =>
-      s
-        .split(',')
-        .map((v) => v.trim())
-        .filter((v) => v !== ''),
-    ),
 
-  /** 生产模式下托管前端静态文件的目录。不设即纯 API 模式(开发态)。 */
-  serveWebDir: z.string().optional(),
+  /*
+   * [已删除] serveWebDir(SERVE_WEB)—— 后端托管前端静态资源的目录。
+   *
+   * 生产形态改成 nginx 作为唯一入口之后,静态资源由 nginx 直接发,
+   * 后端只提供 API。留着这个开关就是两种生产形态并存,
+   * 而 contextPath 在两条路径下的改写规则不一样,两条都得测都得维护。
+   */
 
   /**
    * 应用上下文根。从 CONTEXT_PATH 读,不设即挂根。
@@ -213,8 +218,6 @@ const ConfigSchema = z.object({
 export type AppConfig = z.output<typeof ConfigSchema> & {
   isProduction: boolean;
   isTest: boolean;
-  /** 数据库文件的绝对路径,由 databaseUrl 解析而来。 */
-  dbPath: string;
   webPort: number;
   /** 已解析的 JWT 密钥。未配置时是进程内随机生成的(仅开发态)。 */
   jwtSecret: string;
@@ -243,8 +246,6 @@ const buildConfig = (): AppConfig => {
     bodyLimitBytes: process.env['BODY_LIMIT_BYTES'],
     loginRateLimit: process.env['LOGIN_RATE_LIMIT'],
     loginRateWindowMs: process.env['LOGIN_RATE_WINDOW_MS'],
-    allowedOrigins: process.env['ALLOWED_ORIGINS'],
-    serveWebDir: process.env['SERVE_WEB'],
     contextPath: process.env['CONTEXT_PATH'],
   });
 
@@ -259,42 +260,8 @@ const buildConfig = (): AppConfig => {
 
   const value = parsed.data;
 
-
-  const rawPath = value.databaseUrl.startsWith('file:')
-    ? value.databaseUrl.slice('file:'.length)
-    : value.databaseUrl;
-
   const isProduction = value.nodeEnv === 'production';
 
-  /**
-   * 开发态自动放行 vite dev server。
-   *
-   * 为什么必须有: 开发时前端在 :7002,请求经 vite proxy 转到后端 :7001。
-   * 浏览器发的 Origin 是 http://localhost:7002,而后端收到的 Host 是 127.0.0.1:7001 ——
-   * origin-guard 的"同源即放行"判定不成立,所有 POST 会被拒成 403。
-   * (实测踩到:登录页报"请求来源不被信任"。)
-   *
-   * localhost 与 127.0.0.1 都要放行:两者在浏览器眼里是不同的源,
-   * 而开发者可能用任意一个访问。
-   *
-   * **本机网卡 IP 同样要放行**。vite dev server 监听全部网卡(见 vite.config.ts),
-   * 同事或手机用 http://192.168.x.x:7002 打开页面时,浏览器发的 Origin 就是那个 IP,
-   * 而 proxy 的 changeOrigin 把 Host 换成了 127.0.0.1:7001 —— 同源判定不成立,
-   * 白名单里又没有这个 IP,于是登录被拒成 403。
-   * 症状极具迷惑性: 页面能打开、curl 直连后端也能通,唯独浏览器里登不进去。
-   * (后端日志里会有一行 `拒绝跨源写请求`,带上 origin 和 host,那是唯一的线索。)
-   *
-   * 生产**不加**这些 —— 那是真实的跨源放行,不该出现在产线配置里。
-   */
-  const devOrigins = isProduction
-    ? []
-    : [
-        `http://localhost:${value.webPort}`,
-        `http://127.0.0.1:${value.webPort}`,
-        ...lanIPv4().map((ip) => `http://${ip}:${value.webPort}`),
-      ];
-
-  // 环境变量优先于 ports.json —— 容器里没有 ports.json,只能靠 CONTEXT_PATH 注入
   const contextPrefix = normalizeContextPath(value.contextPath);
 
   /*
@@ -324,10 +291,8 @@ const buildConfig = (): AppConfig => {
   return {
     ...value,
     jwtSecret: rawSecret === '' ? randomBytes(48).toString('base64url') : rawSecret,
-    allowedOrigins: [...new Set([...value.allowedOrigins, ...devOrigins])],
     isProduction,
     isTest: value.nodeEnv === 'test',
-    dbPath: resolve(REPO_ROOT, rawPath),
     webPort: value.webPort,
     contextPrefix,
     contextBase: contextPrefix === '' ? '/' : `${contextPrefix}/`,

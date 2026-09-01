@@ -24,7 +24,7 @@ import {
   type DataScope,
 } from '../../domain/auth/actor.js';
 import { AUTH_ERROR } from '../../domain/auth/auth.errors.js';
-import type { SessionPrincipal } from '../../domain/auth/auth.types.js';
+import type { User } from '../../domain/auth/auth.types.js';
 import type { LoginChallenge, LoginCrypto } from '../../domain/auth/login-crypto.js';
 import type { PasswordHasher } from '../../domain/auth/password-hasher.js';
 import type { TokenSigner } from '../../domain/auth/token-signer.js';
@@ -34,13 +34,6 @@ import type { Clock } from '../../domain/shared/clock.js';
 import type { IdGenerator } from '../../domain/shared/id-generator.js';
 import type { Logger } from '../../domain/shared/logger.js';
 
-
-/**
- * 续期写库的节流间隔。
- *
- * 不节流的话每个请求都要写一次事务 —— SQLite 单写者模型下这会成为全站唯一的
- * 全局写热点,业务写操作都得排在它后面。5 分钟粒度对 7 天的滑动窗口完全够用。
- */
 
 export interface AuthServiceDeps {
   userRepo: UserRepository;
@@ -142,7 +135,8 @@ export class AuthService {
   /**
    * 鉴别身份 —— 每个受保护请求都会调用。
    *
-   * 步骤: 查会话 -> 判过期 -> 判用户状态 -> 合并角色权限 -> 滑动续期。
+   * 步骤: 验签 -> 判过期 -> 从载荷还原主体。**全程不查库**,
+   * 所以这条路径没有数据库开销,也没有可供"踢人下线"的服务端状态。
    */
   async authenticate(rawToken: string, traceId: string): Promise<AuthenticateResult> {
     const result = this.deps.signer.verify(rawToken);
@@ -197,10 +191,11 @@ export class AuthService {
   /**
    * 当前用户信息。给前端渲染菜单、按钮权限用。
    *
-   * 直接从 actor 拼装,不再查库 —— actor 就是刚刚从库里算出来的,
-   * 再查一次纯属浪费。
+   * 权限与角色码直接取自 actor(它们固化在令牌里),但**用户基本信息要查库** ——
+   * 显示名是会被改的,令牌里那份可能已经过期好几天了。
+   * 顺带把"令牌有效但用户已被删"这种情况兜住:查不到就当未登录。
    */
-  async me(actor: ActorContext): Promise<SessionPrincipal['user'] & { roles: string[] }> {
+  async me(actor: ActorContext): Promise<User & { roles: string[] }> {
     const user = await this.deps.userRepo.findById(actor.actorId);
     if (user === null) throw unauthenticated();
     return { ...user, roles: [...actor.roleCodes] };
@@ -209,8 +204,10 @@ export class AuthService {
   /**
    * 修改自己的密码。
    *
-   * 成功后踢掉本人**其他**设备的会话(保留当前设备)——
-   * 改密码的常见动机就是"怀疑账号被盗",不踢掉其他会话等于没改。
+   * [限制] 改密**踢不掉**其他设备。改密码的常见动机就是"怀疑账号被盗",
+   * 会话方案下可以立刻让其他设备失效,JWT 方案下做不到 ——
+   * 已签发的令牌在有效期内始终验得过,旧令牌仍可用到过期。
+   * 缩小这个窗口只能调短 JWT_TTL_SECONDS;要彻底解决只能换回会话查库。
    */
   async changePassword(
     input: { oldPassword: string; newPassword: string },
@@ -234,11 +231,6 @@ export class AuthService {
       updatedAt: now,
       updatedBy: actor.actorId,
     });
-    // [注意] 这里**踢不掉其他设备**。改密码的常见动机是"怀疑账号被盗",
-    // 会话方案下可以立刻让其他设备失效,JWT 方案下做不到 ——
-    // 已签发的令牌在有效期内始终有效。改密后旧令牌仍可用到过期。
-    // 想缩小这个窗口只能调短 JWT_TTL_SECONDS。
-
     this.deps.logger.info('用户修改了密码', { userId: user.id });
   }
 

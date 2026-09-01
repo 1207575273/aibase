@@ -10,7 +10,7 @@
  *
  * [硬约束] 实体的 createdAt/updatedAt 一律由 Service 从这里取 now 显式赋值,
  * **禁止**用 Prisma 的 @default(now()) / @updatedAt,也禁止在 Repository 里
- * 偷写 `data.updatedAt = new Date()`。姊妹项目两边都做了,结果是它 schema 注释
+ * 偷写 `data.updatedAt = new Date()`。曾见过的一个项目两边都做了,结果是它 schema 注释
  * 声称"时间由领域层控制"但 update 路径的时间根本没法在测试里固定。
  */
 export type Clock = () => Date;

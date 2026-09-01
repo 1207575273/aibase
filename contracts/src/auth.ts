@@ -98,10 +98,14 @@ export type ChangePasswordBody = z.input<typeof ChangePasswordBodySchema>;
 /**
  * 登录响应。
  *
- * token 同时通过 HttpOnly Cookie 下发。body 里这一份**仅供非浏览器客户端**
- * (curl 冒烟脚本、运维脚本、未来的移动端)使用。
- * [重要] 前端一律依赖 Cookie,禁止把这个 token 存进 localStorage/sessionStorage ——
- * 存进去就等于把 HttpOnly 提供的 XSS 防护主动放弃掉了。
+ * token 只在这个响应体里下发一次,**不种 Cookie**。所有客户端(浏览器、curl、
+ * 运维脚本、将来的移动端)走的都是同一条通道:自己保存它,后续请求放进
+ * `Authorization: Bearer <token>` 头。
+ *
+ * 浏览器端存 localStorage。这么做失去了 HttpOnly 的 XSS 防护,换来的是
+ * 「凭证不被浏览器自动携带」—— CSRF、Secure 标志、SameSite、Cookie Path
+ * 这一整类部署期问题随之消失。取舍的完整论证见
+ * server/src/domain/auth/token-signer.ts 的头注释。
  */
 export interface LoginResponse {
   token: string;
@@ -123,8 +127,12 @@ export interface MeRoleWire {
 /**
  * 当前登录者的完整视图。前端的一切权限判断都基于它。
  *
- * permissions 是**每请求实时算出来的**,不是登录时冻结的快照 —— 管理员改了角色权限,
- * 用户下一个请求就生效,不需要重新登录。这是选 Session 而非 JWT 的核心收益。
+ * [重要] permissions 与 dataScope 是**登录那一刻固化进 JWT 载荷的快照**,
+ * 不是每请求实时算的。管理员改了这个用户的角色、或改了角色的权限,
+ * 都要等令牌过期重新签发才生效(默认 7 天,由 JWT_TTL_SECONDS 控制)。
+ * 这是选 JWT 而非会话查库的代价之一,不是 bug。
+ *
+ * user 那部分则是每次查库的(显示名会被改),所以 /me 不是纯粹的零查询接口。
  */
 export interface MeResponse {
   user: MeUserWire;

@@ -38,7 +38,7 @@ export class PrismaUserRepository implements UserRepository {
           data: {
             ...toRow(user),
             // 嵌套写:用户与角色绑定在同一条语句里完成,天然原子。
-            // 这正是恢复 @relation 换来的能力 —— 姊妹项目禁用外键后
+            // 这正是恢复 @relation 换来的能力 —— 曾见过的一个项目禁用外键后
             // 这里得手写两次 insert 再自己包事务。
             roles: { create: roleIds.map((roleId) => ({ roleId })) },
           },
@@ -87,7 +87,18 @@ export class PrismaUserRepository implements UserRepository {
 
   async list(filter: UserListFilter): Promise<Page<UserWithRoles>> {
     const where = buildWhere(filter);
-    // 两次独立查询,不包同一快照 —— 理由见 person.repository.ts 的同位置说明。
+    /*
+     * findMany 与 count 是两次独立查询,**不**包在同一个事务快照里。
+     *
+     * 理论上并发写会让 total 与 items 出现瞬时不一致(第 3 页看到 99 条总数、
+     * 实际已经 100 条)。这在分页列表里无害 —— 用户刷新一下就对了。
+     * 而为它包一个事务的代价是实打实的: SQLite 是单写者模型,读事务会和
+     * 业务写操作抢锁,把一个高频只读接口变成全站写入的排队点。
+     *
+     * 两个查询共用同一个 where 对象,所以过滤口径一定一致 ——
+     * 这才是真正会出问题的地方(各拼一次 where 会漏掉行级权限过滤,
+     * 表现为"列表 0 条但总数 37")。
+     */
     const [rows, total] = await Promise.all([
       this.db.user.findMany({
         where,
@@ -124,7 +135,7 @@ export class PrismaUserRepository implements UserRepository {
   }
 
   async delete(id: string): Promise<void> {
-    // user_role 与 session 由外键 onDelete: Cascade 自动清理,这里不需要手工断链。
+    // user_role 由外键 onDelete: Cascade 自动清理,这里不需要手工断链。
     await mapPrismaError(() => this.db.user.delete({ where: { id } }));
   }
 
@@ -142,6 +153,9 @@ const buildWhere = (filter: UserListFilter): PrismaTypes.UserWhereInput => {
     ];
   }
   if (filter.status !== undefined) where.status = filter.status;
+  // 行级数据权限。findMany 与 count 共用这个 where,所以分页总数天然同口径 ——
+  // 两边各拼一次 where 是"列表 0 条但总数 37"这类穿帮的经典成因。
+  if (filter.scopeOwnerId !== undefined) where.createdBy = filter.scopeOwnerId;
   return where;
 };
 
