@@ -119,7 +119,9 @@ EXPOSE ${APP_PORT}
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "const r=process.env.CONTEXT_PATH||'';const c=(r===''||r==='/')?'':(r.startsWith('/')?r:'/'+r).replace(/\/+$/,'');fetch('http://127.0.0.1:'+(process.env.PORT||7101)+c+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# 启动流程全在 start.sh(迁移 -> 种子 -> exec 应用),那里有完整注释。
+# 默认入口是 start.sh(只启动应用)。migrate 服务在 compose 里用
+# `command: ["./start-migrate.sh"]` 覆盖成迁移+种子那条路 —— 同一个镜像两个入口。
+# 两个脚本各自有完整注释。
 #
 # [关键] 必须用 exec 形式(JSON 数组)。写成 `CMD ./start.sh` 会被 docker
 # 包一层 `/bin/sh -c`,PID 1 就成了那个 sh —— 它收到 SIGTERM 不转发给子进程,
