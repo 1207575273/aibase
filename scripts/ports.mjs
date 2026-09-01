@@ -34,6 +34,22 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  * 兜底默认值。改这里必须同步改 server/src/config/index.ts 的 zod default,
  * 有测试守着,不同步会红。
  */
+/**
+ * 端口兜底默认值。真源是 `.env`,这里只在既没有 .env 也没有环境变量时用到。
+ *
+ * ── 本项目的端口区段:7101-7109 ─────────────────────────────────
+ *   7101  服务入口(开发态是后端,生产态是 nginx —— 同一个号,不用记两套)
+ *   7102  前端 dev server
+ *   7103  开发数据库(deploy/docker-compose.dev.yml)
+ *   7104  测试环境入口(deploy/docker-compose.test.yml)
+ *   7105-7109  **预留** —— 以后加 Redis / MQ / 对象存储时从这里取,别随手挑一个
+ *   8101  e2e 服务进程,由 `server + 1000` 派生,不单独配
+ *
+ * [为什么要分段] 一台开发机上同时跑多个项目是常态。不分段就会撞 ——
+ * 撞过一次: 开发库本来选的 15432,正好是本机另一个项目的 PG 容器,
+ * 症状是"连上了但表都不对",比连不上难查得多。
+ * clone 这个模板去做新项目时,把整段换掉(比如 7201-7209)。
+ */
 export const DEFAULTS = { server: 7101, web: 7102, contextPath: '' };
 
 /**
