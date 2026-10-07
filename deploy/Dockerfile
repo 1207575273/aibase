@@ -21,7 +21,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY server/package.json ./server/
 COPY web/package.json ./web/
 COPY e2e/package.json ./e2e/
-COPY contracts/package.json ./contracts/
+COPY packages/contracts/package.json ./packages/contracts/
 
 # 跳过 postinstall(prisma generate)—— 此刻还没有 schema 文件
 RUN pnpm install --frozen-lockfile --ignore-scripts
@@ -36,7 +36,7 @@ COPY . .
 # [注意] 这里**不做类型检查** —— build 脚本只负责打包(见 package.json)。
 # 类型检查是提交前的门禁(`pnpm typecheck`),放进镜像构建只会让每次部署
 # 白等十几秒,而且真有类型错误时早在本地就该被拦住了。
-RUN pnpm exec prisma generate \
+RUN pnpm exec prisma generate --config server/prisma.config.ts \
  && pnpm -r --parallel build
 
 # 生成**自包含**的部署目录 —— 这是 pnpm 官方为容器部署提供的命令。
@@ -67,6 +67,13 @@ FROM node:22-slim AS runtime
 ARG APP_PORT=7101
 WORKDIR /app
 
+# [镜像识别标签] 与 compose 里容器的 app.* 标签同一套键。
+# 镜像不分环境(test/prod 用同一个镜像正是测试环境的意义),所以只有 project 和 service:
+#   docker images --filter label=app.project=keel
+# app.title 是中文显示名,给人看(docker inspect / Portainer);
+# 过滤永远用 app.project —— 中文值在 GBK 终端里做 --filter 容易因编码错配失灵
+LABEL app.project="keel" app.title="Keel" app.service="app"
+
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=${APP_PORT}
@@ -89,7 +96,8 @@ COPY --from=build /app/server/src/generated ./server/src/generated
 COPY --from=build /app/server/prisma ./server/prisma
 # pnpm-workspace.yaml 不是给 pnpm 用的,是 config/index.ts 定位 REPO_ROOT 的锚点
 # (向上找第一个含它的目录),删了会让所有相对路径解析错位
-COPY package.json pnpm-workspace.yaml prisma.config.ts ./
+COPY package.json pnpm-workspace.yaml ./
+COPY server/prisma.config.ts ./server/prisma.config.ts
 COPY deploy/start.sh ./start.sh
 COPY deploy/start-migrate.sh ./start-migrate.sh
 # 显式加执行位: 构建 context 来自 Windows 时文件权限不可靠,不能赌 COPY 进来的恰好可执行

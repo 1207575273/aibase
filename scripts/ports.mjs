@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * 兜底默认值。改这里必须同步改 server/src/config/index.ts 的 zod default,
+ * 兜底默认值。改这里必须同步改 server/src/platform/config/index.ts 的 zod default,
  * 有测试守着,不同步会红。
  */
 /**

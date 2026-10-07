@@ -1,8 +1,11 @@
 /**
- * e2e 全局前置 —— 建一个独立数据库,起一个真实的服务进程。
+ * e2e 全局前置 —— 建一个独立 schema,起一个真实的服务进程。
  *
- * 干什么: 建库 -> 跑迁移 -> 灌种子 -> spawn 服务进程 -> 等它就绪。
- *         全部用例跑完后杀进程、删库。
+ * 干什么: 建 schema -> 跑迁移 -> 灌种子 -> spawn 服务进程 -> 等它就绪。
+ *         全部用例跑完后杀进程、删 schema。
+ *
+ * 为什么是 schema 而不是 database: 沙箱里所有项目共用一个 PG 实例、只有自己 schema 的权限,
+ *   没有 CREATEDB。e2e 走的正是上线路径: 同一个 DATABASE_URL + 不同的 DATABASE_SCHEMA。
  *
  * 为什么要起真进程而不是像后端单测那样 app.request():
  *   app.request() 走的是 Hono 的内存 fetch,**绕过了整个 Node HTTP 层**。
@@ -51,24 +54,17 @@ export const BASE_URL = `http://127.0.0.1:${E2E_PORT}${contextPrefix}/api`;
 /** 固定的种子密码,用例直接用它登录。 */
 export const E2E_ADMIN = { username: 'admin', password: 'e2e-admin-pass-123' };
 
-/** e2e 专用库名带 pid —— 两个并发的 e2e 进程不会互相踩。 */
-const E2E_DB = `keel_e2e_${process.pid}`;
+/** e2e 专用 schema 名带 pid —— 两个并发的 e2e 进程不会互相踩。 */
+const E2E_SCHEMA = `tmp_e2e_${process.pid}`;
 
 let child: ChildProcess | undefined;
-let baseUrl: string | undefined;
+let databaseUrl: string | undefined;
 
 const isWindows = process.platform === 'win32';
 
-/** 把连接串里的库名换掉,其余部分原样保留(密码里的特殊字符不会被拼坏)。 */
-const withDatabase = (connectionString: string, database: string): string => {
-  const url = new URL(connectionString);
-  url.pathname = `/${database}`;
-  return url.toString();
-};
-
-/** 连到维护库执行一条语句。建库/删库都走这里。 */
-const runOnMaintenanceDb = async (adminUrl: string, sql: string): Promise<void> => {
-  const client = new Client({ connectionString: withDatabase(adminUrl, 'postgres') });
+/** 在 e2e 用的库里执行一条语句。建 schema / 删 schema 都走这里。 */
+const runSql = async (url: string, sql: string): Promise<void> => {
+  const client = new Client({ connectionString: url });
   await client.connect();
   try {
     await client.query(sql);
@@ -96,26 +92,27 @@ const waitForReady = async (timeoutMs: number): Promise<void> => {
 };
 
 export const setup = async (): Promise<void> => {
-  // 与单测一样连开发库,自己建一个独立的 e2e database(见 server/tests/helpers/global-setup.ts)
-  const adminUrl = process.env['DATABASE_URL'];
-  if (adminUrl === undefined || adminUrl === '') {
+  // 与单测一样连开发库,自己建一个独立的 e2e schema(见 server/tests/helpers/global-setup.ts)
+  const url = process.env['DATABASE_URL'];
+  if (url === undefined || url === '') {
     throw new Error(
       'DATABASE_URL 未设置。跑 e2e 前先起开发数据库:\n' +
         '  docker compose -f deploy/docker-compose.dev.yml up -d --wait',
     );
   }
-  baseUrl = adminUrl;
+  databaseUrl = url;
 
-  // 上一次被 Ctrl+C 掐断会留下残库,先删再建
-  await runOnMaintenanceDb(adminUrl, `DROP DATABASE IF EXISTS "${E2E_DB}"`);
-  await runOnMaintenanceDb(adminUrl, `CREATE DATABASE "${E2E_DB}"`);
+  // 上一次被 Ctrl+C 掐断会留下残留 schema,先删再建
+  await runSql(url, `DROP SCHEMA IF EXISTS "${E2E_SCHEMA}" CASCADE`);
+  await runSql(url, `CREATE SCHEMA "${E2E_SCHEMA}"`);
 
   const env = {
     ...process.env,
     NODE_ENV: 'test',
     PORT: String(E2E_PORT),
     HOST: '127.0.0.1',
-    DATABASE_URL: withDatabase(adminUrl, E2E_DB),
+    DATABASE_URL: url,
+    DATABASE_SCHEMA: E2E_SCHEMA,
     LOG_LEVEL: 'error',
     SEED_ADMIN_PASSWORD: E2E_ADMIN.password,
   };
@@ -125,10 +122,10 @@ export const setup = async (): Promise<void> => {
   };
 
   // 真跑迁移(不是 db push)—— 顺带把 schema 与 migration 的漂移暴露出来
-  run(['exec', 'prisma', 'migrate', 'deploy']);
-  run(['db:seed']);
+  run(['db', 'deploy']);
+  run(['db', 'seed']);
 
-  child = spawn('pnpm', ['dev:server'], {
+  child = spawn('pnpm', ['--filter', '@app/server', 'dev'], {
     cwd: REPO_ROOT,
     env,
     stdio: 'inherit',
@@ -161,16 +158,9 @@ export const teardown = async (): Promise<void> => {
     }
   }
 
-  if (baseUrl === undefined) return;
+  if (databaseUrl === undefined) return;
 
-  // 给进程一点时间释放数据库连接,否则 DROP DATABASE 会报"正在被访问"
+  // 给进程一点时间释放连接;DROP SCHEMA 不要求无连接,但残留事务持锁会让它等待
   await new Promise((r) => setTimeout(r, 500));
-
-  // 仍有残留连接时先踢掉再删 —— teardown 卡住比测试失败更难查
-  await runOnMaintenanceDb(
-    baseUrl,
-    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-     WHERE datname = '${E2E_DB}' AND pid <> pg_backend_pid()`,
-  );
-  await runOnMaintenanceDb(baseUrl, `DROP DATABASE IF EXISTS "${E2E_DB}"`);
+  await runSql(databaseUrl, `DROP SCHEMA IF EXISTS "${E2E_SCHEMA}" CASCADE`);
 };

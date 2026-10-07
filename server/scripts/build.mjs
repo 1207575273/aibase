@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 const SERVER_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = resolve(SERVER_ROOT, '..');
 
-const CONTRACTS_ENTRY = resolve(REPO_ROOT, 'contracts/src/index.ts');
+const CONTRACTS_ENTRY = resolve(REPO_ROOT, 'packages/contracts/src/index.ts');
 
 /**
  * 两个入口共用同一套配置。

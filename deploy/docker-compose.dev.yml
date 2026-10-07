@@ -24,6 +24,15 @@ services:
   postgres:
     image: postgres:17-alpine
     container_name: keel-dev-postgres
+    # [统一识别标签] 三套栈(dev/test/prod)的容器与卷都打 app.project=项目名。
+    # compose 自带的 com.docker.compose.project 每个栈一个值(keel-dev/keel-test/keel),
+    # 没法用一条过滤器横跨三套;固定键则可以:
+    #   docker ps -a --filter label=app.project=keel
+    labels:
+      app.project: keel
+      app.title: Keel
+      app.env: dev
+      app.service: postgres
     environment:
       POSTGRES_USER: keel
       POSTGRES_PASSWORD: keel_dev_password
@@ -51,3 +60,7 @@ services:
 
 volumes:
   keel-dev-pgdata:
+    labels:
+      app.project: keel
+      app.title: Keel
+      app.env: dev

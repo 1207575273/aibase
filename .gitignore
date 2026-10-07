@@ -4,11 +4,13 @@ node_modules/
 
 # 构建产物
 dist/
+# pnpm package 输出的交付包
+release/
 build/
 web/dist/
 server/dist/
 
-# Prisma 生成物(每次 pnpm install / db:generate 重新生成,不入库)
+# Prisma 生成物(每次 pnpm install / pnpm db generate 重新生成,不入库)
 server/src/generated/
 
 # 运行时数据。数据库跑在 docker 里(数据在命名卷,不在仓库),
@@ -38,7 +40,6 @@ coverage/
 .playwright-mcp/
 test-results/
 playwright-report/
-*.png
 .tmp/
 *.tsbuildinfo
 .tanstack/

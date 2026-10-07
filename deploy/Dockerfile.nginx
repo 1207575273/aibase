@@ -19,7 +19,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY server/package.json ./server/
 COPY web/package.json ./web/
 COPY e2e/package.json ./e2e/
-COPY contracts/package.json ./contracts/
+COPY packages/contracts/package.json ./packages/contracts/
 
 # --ignore-scripts 跳过 postinstall 的 prisma generate:
 # 前端构建用不到 Prisma client,而此刻 schema 文件还没 COPY 进来
@@ -34,6 +34,9 @@ RUN pnpm --filter @app/web build
 
 # ── 阶段 2:运行时 ──────────────────────────────────────────────
 FROM nginx:1.27-alpine AS runtime
+
+# [镜像识别标签] 与 app 镜像、compose 容器同一套键: docker images --filter label=app.project=keel
+LABEL app.project="keel" app.title="Keel" app.service="nginx"
 
 # 换掉默认站点配置。default.conf 里那个 listen 80 的 server 块必须去掉,
 # 否则两个 server 块都监听会导致请求落到哪个取决于顺序,行为不确定。

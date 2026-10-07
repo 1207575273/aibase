@@ -30,6 +30,12 @@
  * "同样调 10% 亮度,黄色刺眼、蓝色发灰"的问题。这也是 shadcn/ui 现在的默认。
  */
 
+/*
+ * 暗色主题已移除(基座只保留一套浅色)。这一行**必须保留**:
+ * shadcn 组件里带着 dark: 前缀的类,删掉它 Tailwind v4 会退回"跟随系统暗色模式",
+ * 系统切到暗色时这些类生效、而暗色变量已不存在,页面变成一半深一半浅。
+ * 留着它,dark: 只在 <html class="dark"> 时生效,而基座从不加这个类。
+ */
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
@@ -62,32 +68,6 @@
   --warning-foreground: oklch(0.141 0.005 285.823);
 }
 
-.dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-
-  --success: oklch(0.696 0.17 162.48);
-  --success-foreground: oklch(0.141 0.005 285.823);
-  --warning: oklch(0.828 0.189 84.429);
-  --warning-foreground: oklch(0.141 0.005 285.823);
-}
 
 /* inline 关键字让 utility 里保留 var() 引用而不是烘焙值 —— 见文件头说明 */
 @theme inline {

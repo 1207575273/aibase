@@ -7,7 +7,7 @@
  * 两种模式共用一个组件外壳,只换校验规则。
  *
  * [关键] 校验用的是**表单 schema**(UserFormSchema / CreateUserFormSchema),
- * 不是请求体 schema。理由见 contracts/src/user.ts 里 UserFormSchema 的注释 ——
+ * 不是请求体 schema。理由见 packages/contracts/src/user.ts 里 UserFormSchema 的注释 ——
  * 混用会导致「点保存没反应且没有任何提示」。
  */
 

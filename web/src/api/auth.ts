@@ -6,7 +6,6 @@
 import type {
   ChangePasswordBody,
   LoginBody,
-  LoginChallengeResponse,
   LoginResponse,
   MeResponse,
   OkResponse,
@@ -15,8 +14,6 @@ import type {
 import { api } from './http';
 
 export const authApi = {
-  /** 取登录挑战(公钥 + 一次性 nonce)。提交登录前先调这个。 */
-  loginChallenge: (): Promise<LoginChallengeResponse> => api.get('/auth/login-challenge'),
   login: (body: LoginBody): Promise<LoginResponse> => api.post('/auth/login', body),
   logout: (): Promise<OkResponse> => api.post('/auth/logout'),
   me: (): Promise<MeResponse> => api.get('/auth/me'),

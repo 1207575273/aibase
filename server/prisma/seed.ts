@@ -8,15 +8,15 @@
  * [幂等] 全部用 upsert —— 重复执行不会报错也不会产生重复数据。
  *   这很重要:`prisma migrate reset` 会自动调用它,而且开发中经常要手工重跑。
  *
- * 运行: pnpm db:seed
+ * 运行: pnpm db seed
  */
 
 import { PERMISSION_CODES } from '@app/contracts';
 import { randomBytes } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
-import { createPrismaClient } from '../src/infrastructure/persistence/postgres/prisma-client.js';
-import { ScryptPasswordHasher } from '../src/infrastructure/security/scrypt-password-hasher.js';
-import { config } from '../src/config/index.js';
+import { createPrismaClient } from '../src/platform/db/prisma-client.js';
+import { ScryptPasswordHasher } from '../src/modules/identity/infra/scrypt-password-hasher.js';
+import { config } from '../src/platform/config/index.js';
 
 const ADMIN_ROLE_CODE = 'ADMIN';
 const VIEWER_ROLE_CODE = 'VIEWER';
@@ -24,7 +24,10 @@ const ADMIN_USERNAME = 'admin';
 
 
 const main = async (): Promise<void> => {
-  const prisma = await createPrismaClient({ connectionString: config.databaseUrl });
+  const prisma = await createPrismaClient({
+    connectionString: config.databaseUrl,
+    schema: config.databaseSchema,
+  });
   const hasher = new ScryptPasswordHasher();
   const now = new Date();
 
@@ -121,7 +124,7 @@ const main = async (): Promise<void> => {
   }
 
   process.stdout.write(
-    `[INFO] 权限码共 ${PERMISSION_CODES.length} 个,真源在 contracts/src/permissions.ts\n`,
+    `[INFO] 权限码共 ${PERMISSION_CODES.length} 个,真源在 packages/contracts/src/permissions.ts\n`,
   );
 
   await prisma.$disconnect();

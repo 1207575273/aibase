@@ -82,7 +82,7 @@ describe('认证链路', () => {
      *
      * JWT 是自验证的,服务端没有可吊销的对象。真正的登出发生在前端:
      * 把本地存的令牌删掉。这条用例把这个事实钉死 —— 它不是 bug,
-     * 而是选 JWT 时一并选下的代价(见 domain/auth/token-signer.ts)。
+     * 而是选 JWT 时一并选下的代价(见 server/src/modules/identity/domain/token-signer.ts)。
      *
      * 哪天这条变红了,说明有人加了服务端吊销机制。那本身可能是对的改动,
      * 但要意识到:每请求查一次吊销表,就等于绕回了会话方案。
@@ -113,87 +113,10 @@ describe('认证链路', () => {
     expect(res.headers.get('x-request-id')).toBe(res.body.traceId);
   });
 
-  describe('密码加密传输', () => {
-    /** 与浏览器完全相同的 Web Crypto 调用 —— Node 22 原生就有。 */
-    const encrypt = async (
-      password: string,
-      challenge: { keyId: string; publicKey: string; nonce: string },
-    ): Promise<string> => {
-      // [坑] getRandomValues 不能解构出来单独调 —— 它内部要用 this,
-      // 脱离 crypto 对象会抛 "Value of this must be of type Crypto"。
-      // subtle 是个独立对象所以可以解构。
-      const { subtle } = globalThis.crypto;
-      const b64 = (b: ArrayBuffer): string => Buffer.from(b).toString('base64url');
-
-      const publicKey = await subtle.importKey(
-        'spki',
-        Buffer.from(challenge.publicKey, 'base64url'),
-        { name: 'RSA-OAEP', hash: 'SHA-256' },
-        false,
-        ['encrypt'],
-      );
-      const aesKey = await subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
-      const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-      const data = await subtle.encrypt(
-        { name: 'AES-GCM', iv },
-        aesKey,
-        new TextEncoder().encode(JSON.stringify({ p: password, n: challenge.nonce })),
-      );
-      const wrapped = await subtle.encrypt(
-        { name: 'RSA-OAEP' },
-        publicKey,
-        await subtle.exportKey('raw', aesKey),
-      );
-      return [challenge.keyId, b64(wrapped), b64(iv.buffer), b64(data)].join('.');
-    };
-
-    it('should_login_with_encrypted_password', async () => {
-      const challenge = await api.get<{ keyId: string; publicKey: string; nonce: string }>(
-        '/auth/login-challenge',
-      );
-      expect(challenge.status).toBe(200);
-      expect(challenge.body.publicKey.length).toBeGreaterThan(300);
-
-      const passwordCipher = await encrypt(E2E_ADMIN.password, challenge.body);
-      const res = await api.post<{ token: string }>('/auth/login', {
-        username: E2E_ADMIN.username,
-        passwordCipher,
-      });
-
-      expect(res.status).toBe(200);
-      expect(res.body.token.split('.')).toHaveLength(3);
-    });
-
-    it('should_reject_replayed_cipher', async () => {
-      // ★ 端到端确认防重放确实生效 —— 密文不能变成长期有效的凭据
-      const challenge = await api.get<{ keyId: string; publicKey: string; nonce: string }>(
-        '/auth/login-challenge',
-      );
-      const passwordCipher = await encrypt(E2E_ADMIN.password, challenge.body);
-      const body = { username: E2E_ADMIN.username, passwordCipher };
-
-      expect((await api.post('/auth/login', body)).status).toBe(200);
-
-      const replay = await api.post<ErrorBody>('/auth/login', body);
-      expect(replay.status).toBe(400);
-      expect(replay.body.code).toBe('AUTH_LOGIN_KEY_EXPIRED');
-    });
-
-    it('should_reject_both_password_and_cipher', async () => {
-      // 契约层的 refine: 两条通道二选一,同时给是非法请求
-      const res = await api.post<ErrorBody>('/auth/login', {
-        username: E2E_ADMIN.username,
-        password: E2E_ADMIN.password,
-        passwordCipher: 'whatever',
-      });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('VALIDATION_FAILED');
-    });
-
-    it('should_reject_neither_password_nor_cipher', async () => {
-      const res = await api.post<ErrorBody>('/auth/login', { username: E2E_ADMIN.username });
-      expect(res.status).toBe(400);
-    });
+  it('should_reject_login_without_password', async () => {
+    const res = await api.post<ErrorBody>('/auth/login', { username: E2E_ADMIN.username });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_FAILED');
   });
 
   it('should_expose_permission_catalog_from_code_constants', async () => {

@@ -1,0 +1,306 @@
+/**
+ * 应用配置 —— 全项目唯一读 process.env 的地方。
+ *
+ * 干什么: 用 zod 解析并校验全部环境变量,启动时 fail-fast,导出类型化的 config 对象。
+ * 解决什么问题:
+ * - 曾见过的一个项目有 **37 处裸读 process.env 散在 16 个文件**里,没有集中校验。
+ *   实锤后果:同一个端口在 ports.json 写 42421、main.ts 默认值 42421、
+ *   .env 与 .env.example 写 41421、origin-guard 兜底 42421 —— 四处记载三个值。
+ * - 配置错误必须在**启动时**炸,而不是等到某个冷门代码路径第一次执行才发现。
+ *   会静默产生一个 Invalid Date 的过期时间,所有会话立刻失效且没人知道为什么。
+ *
+ * eslint R4 规则禁止其他文件裸读 process.env,强制走这里。
+ */
+
+import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
+
+/**
+ * 仓库根。所有相对路径(数据库、静态资源、.env)都以它为基准。
+ *
+ * [坑] **不能**用 import.meta.url 往上数几层算出来 —— 源码在
+ * server/src/platform/config/(往上五层)、打包产物在 server/dist/(往上两层),
+ * 层数不一样。按源码层数写死的话,dev 全绿、生产启动时找不到 .env 直接崩,
+ * 是典型的"只炸生产"问题。
+ *
+ * 改用「从当前文件位置向上找第一个有 pnpm-workspace.yaml 的目录」——
+ * 两种形态都能正确定位,也不依赖 cwd(容器里 cwd 可能是任意目录)。
+ * 找不到时退回 cwd。
+ */
+const findRepoRoot = (): string => {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 10; i += 1) {
+    if (existsSync(resolve(dir, 'pnpm-workspace.yaml'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
+};
+
+export const REPO_ROOT = findRepoRoot();
+
+/**
+ * 加载 .env。
+ *
+ * [优先级] 真实环境变量 > .env 文件 > 代码里的默认值。
+ * Node 的 loadEnvFile **不会覆盖**已存在的 process.env 条目,所以这个顺序天然成立 ——
+ * 容器/CI 里注入的环境变量永远赢过仓库里的 .env 文件,不会出现
+ * "生产上明明设了变量却被 .env 盖掉"这种事故。
+ *
+ * 用 Node 原生 API 而不是 dotenv:少一个依赖,行为也更可预期。
+ */
+try {
+  process.loadEnvFile(resolve(REPO_ROOT, '.env'));
+} catch {
+  // .env 不存在是正常情况(容器/CI 用真实环境变量),静默走默认值。
+}
+
+/**
+ * 把任意写法的 contextPath 归一成 '' 或 '/xxx'(前有斜杠、后无斜杠)。
+ *
+ * 为什么要归一: contextPath 的坑几乎全来自「同一个值有多种写法」——
+ * `''` / `'/'` / `'/app'` / `'/app/'` 语义相同但字符串不同,
+ * 各处消费点各自 if 一遍就必然有人漏判,症状是路径多一道或少一道斜杠,
+ * 而且只在启用 contextPath 时才炸。归一成一种形态,消费点直接用不再自己拼。
+ *
+ * [同步] `scripts/ports.mjs` 里有一份等价实现(给 vite 和开发脚本用,
+ * 那边在 workspace 之外没法 import 本文件)。改这里要同步改那边,
+ * 两边的一致性由 config.test.ts 用同一组样例守着。
+ */
+export const normalizeContextPath = (raw: string | undefined | null): string => {
+  if (raw === undefined || raw === null) return '';
+  const trimmed = String(raw).trim();
+  if (trimmed === '' || trimmed === '/') return '';
+  const withLeading = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return withLeading.replace(/\/+$/, '');
+};
+
+/**
+ * 端口的兜底默认值。
+ *
+ * 真源是 `.env`(见 .env.example)。这里的值只在**既没有 .env 也没有环境变量**
+ * 时才会被用到 —— 比如容器里只 COPY 了 dist 却忘了给 PORT。
+ *
+ * [同步] `scripts/ports.mjs` 的 DEFAULTS 必须与此完全一致(那份给 vite 和开发
+ * 脚本用,两个运行时读不到对方的代码)。`config/ports-default.test.ts` 守着,
+ * 改一处不改另一处会红。
+ *
+ * 曾经这里读的是根目录的 ports.json,号称"端口单一真源",实测是个错觉:
+ * 读它 5 处、绕过它硬编码 6 处,反而让人以为改一处就够了。详见 ports.mjs 头注释。
+ */
+const DEFAULT_SERVER_PORT = 7101;
+const DEFAULT_WEB_PORT = 7102;
+
+/**
+ * 本项目在数据库里的 schema 名。沙箱里多个项目共用一个 PG 实例,靠它分开。
+ *
+ * 只收小写标识符:它会进 search_path 与建表 SQL,只能靠白名单格式挡住注入,不能靠转义。
+ * **必填,没有默认值** —— 开发 / 测试 / 生产各自配置,模板不替人选。
+ * 约定按环境加后缀 <项目>_dev / _test / _prod(同一项目的几套环境在库里排在一起),
+ * 不符合只在启动时告警(见 main.ts),不拦截。
+ */
+export const DatabaseSchemaName = z
+  .string({ error: 'DATABASE_SCHEMA 必须设置,如 <项目名>_dev(见 .env.example 的数据库段)' })
+  .regex(/^[a-z_][a-z0-9_]{0,62}$/, 'DATABASE_SCHEMA 只能是小写字母、数字、下划线,且不以数字开头,最长 63');
+
+/**
+ * 不开放成环境变量的调优参数。几乎没人改、改了也只影响边角行为,
+ * 开放出去只会让 .env 变长。真有项目要调,在 ConfigSchema 里加回一行并登记 .env.example。
+ */
+const TUNING: {
+  logRetainFiles: number;
+  logMaxFileSize: string;
+  bodyLimitBytes: number;
+  loginRateLimit: number;
+  loginRateWindowMs: number;
+} = {
+  /** 保留多少个轮转文件。按天轮转,约等于保留多少天。 */
+  logRetainFiles: 14,
+  /** 单文件大小上限。当天日志超过它会再切一个,防止某天狂刷出一个巨型文件。 */
+  logMaxFileSize: '50m',
+  /** 请求体大小上限(字节)。防一个大 JSON 打爆内存。 */
+  bodyLimitBytes: 1024 * 1024,
+  /** 登录限流: 同一 用户名+IP 在窗口内允许的失败次数,以及窗口长度。 */
+  loginRateLimit: 5,
+  loginRateWindowMs: 60_000,
+};
+
+const ConfigSchema = z.object({
+  nodeEnv: z.enum(['development', 'test', 'production']).default('development'),
+
+  port: z.coerce.number().int().min(1).max(65535).default(DEFAULT_SERVER_PORT),
+  /**
+   * 绑定地址。默认 0.0.0.0 监听全部网卡,局域网内其他设备可直接访问 ——
+   * 开发时用手机试移动端、给同事演示都不用改配置。
+   * 服务本身是有鉴权的(未登录一律 401),但仍建议只在可信网络里这么开;
+   * 只想本机访问就设 HOST=127.0.0.1。
+   */
+  host: z.string().default('0.0.0.0'),
+
+  /**
+   * 前端 dev server 端口。后端自己不监听它,开发脚本与 vite 读同一份值,
+   * 启动横幅也要靠它打印前端地址。生产单端口部署时用不到。
+   */
+  webPort: z.coerce.number().int().min(1).max(65535).default(DEFAULT_WEB_PORT),
+
+  /**
+   * PostgreSQL 连接串,形如 postgresql://user:pass@host:5432/dbname
+   *
+   * 没有默认值 —— **不设就拒绝启动**。
+   * 给一个 localhost 默认值看似方便,实际是把"忘了配数据库"这种错误
+   * 推迟到第一次查询才暴露,而且在生产上可能悄悄连到本机某个同名库。
+   * 模板不会自动拉起数据库: 开发 / 测试 / 生产各自在 .env 或部署环境里配置。
+   */
+  databaseUrl: z
+    .string({ error: 'DATABASE_URL 必须设置(PostgreSQL 连接串,见 .env.example 的数据库段)' })
+    .min(1, 'DATABASE_URL 必须设置(PostgreSQL 连接串,见 .env.example 的数据库段)'),
+
+  databaseSchema: DatabaseSchemaName,
+
+  logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+
+  /**
+   * JSONL 日志文件路径(相对仓库根)。
+   *
+   * 留空 = 不落盘,只输出 stdout —— 容器/K8s 部署时用这个,
+   * 日志由平台采集,在容器里写文件反而是反模式(除非挂了卷)。
+   * 本机 / 物理机 / pm2 部署保留默认,方便直接 grep 排查。
+   */
+  logFile: z.string().default('logs/app.jsonl'),
+
+  /**
+   * JWT 签名密钥。至少 32 字节,不够长启动直接崩(见 hs256-token-signer.ts)。
+   *
+   * [重要] 换掉它会让**所有已签发的令牌立即失效**,全员重新登录 ——
+   * 这也是唯一的"强制全员下线"手段:JWT 是自验证的,无法单独吊销某一个令牌。
+   *
+   * 不设时开发态自动生成随机密钥并打警告(进程一重启大家就得重登,只适合本机开发);
+   * 生产不设则**拒绝启动** —— 多实例部署时各实例密钥不同,登录到 A 的令牌在 B 上
+   * 验不过,表现为"随机掉登录",极难定位。
+   */
+  jwtSecret: z.string().optional(),
+
+  /**
+   * 令牌有效期(秒)。默认 7 天。
+   *
+   * 它同时决定两件事,调它就是在两者之间取舍:
+   *   - 用户多久要重新登录一次
+   *   - 改权限 / 禁用账号后多久真正生效 —— 权限固化在令牌载荷里,要等过期才刷新
+   * 要权限变更更快生效就调短,代价是登录更频繁。
+   */
+  jwtTtlSeconds: z.coerce.number().int().min(60).default(7 * 24 * 60 * 60),
+
+  /*
+   * [已删除] allowedOrigins —— 跨源白名单。
+   *
+   * 它是 Cookie 认证时代 origin-guard(CSRF 主防线)的配置项。登录态改成
+   * JWT + Authorization 头之后,凭证不再由浏览器自动携带,跨站页面发起的请求
+   * 带不上这个头,CSRF 天然不成立,origin-guard 连同这份白名单一起删掉了。
+   *
+   * 留着不删的危害是实打实的: 中间件已经没了,而 config 里还留着完整的
+   * zod schema + devOrigins 计算 + 一大段讲 origin-guard 踩坑的注释,
+   * 读到的人会以为系统仍有 CSRF 防护。不要因为"将来可能用得上"再加回来 ——
+   * 真需要跨源时要加的是 CORS 中间件,那是另一回事。
+   */
+
+  /*
+   * [已删除] serveWebDir(SERVE_WEB)—— 后端托管前端静态资源的目录。
+   *
+   * 生产形态改成 nginx 作为唯一入口之后,静态资源由 nginx 直接发,
+   * 后端只提供 API。留着这个开关就是两种生产形态并存,
+   * 而 contextPath 在两条路径下的改写规则不一样,两条都得测都得维护。
+   */
+
+  /**
+   * 应用上下文根。从 CONTEXT_PATH 读,不设即挂根。
+   * 归一化后同时提供 contextPrefix / contextBase / apiPrefix 三种形态。
+   */
+  contextPath: z.string().optional(),
+});
+
+export type AppConfig = z.output<typeof ConfigSchema> & typeof TUNING & {
+  isProduction: boolean;
+  isTest: boolean;
+  webPort: number;
+  /** 已解析的 JWT 密钥。未配置时是进程内随机生成的(仅开发态)。 */
+  jwtSecret: string;
+  /** 归一化后的上下文根:'' 或 '/app'(前有斜杠、后无斜杠)。拼路径用。 */
+  contextPrefix: string;
+  /** 归一化后的基路径:'/' 或 '/app/'(带尾斜杠)。浏览器可点地址用。 */
+  contextBase: string;
+  /** API 完整前缀:'/api' 或 '/app/api'。前端 baseURL 与后端挂载点共用同一个值。 */
+  apiPrefix: string;
+};
+
+const buildConfig = (): AppConfig => {
+  const parsed = ConfigSchema.safeParse({
+    nodeEnv: process.env['NODE_ENV'],
+    port: process.env['PORT'],
+    host: process.env['HOST'],
+    webPort: process.env['WEB_PORT'],
+    databaseUrl: process.env['DATABASE_URL'],
+    databaseSchema: process.env['DATABASE_SCHEMA'],
+    logLevel: process.env['LOG_LEVEL'],
+    logFile: process.env['LOG_FILE'],
+    jwtSecret: process.env['JWT_SECRET'],
+    jwtTtlSeconds: process.env['JWT_TTL_SECONDS'],
+    contextPath: process.env['CONTEXT_PATH'],
+  });
+
+  if (!parsed.success) {
+    // 直接写 stderr 而不是用 logger —— 此刻 logger 还没建起来(它依赖 config)。
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('\n');
+    process.stderr.write(`[FATAL] 环境变量配置错误,启动中止:\n${issues}\n`);
+    process.exit(1);
+  }
+
+  const value = parsed.data;
+
+  const isProduction = value.nodeEnv === 'production';
+
+  const contextPrefix = normalizeContextPath(value.contextPath);
+
+  /*
+   * JWT 密钥兜底。
+   *
+   * 开发态没设就随机生成 —— 直接崩会让 `pnpm dev` 开箱即用失效,新人第一次跑就撞墙。
+   * 代价是进程重启密钥就变、已签发的令牌全部失效,所以要打一行醒目警告。
+   *
+   * 生产态则**拒绝启动**:多实例各自随机会导致「登录到 A 的令牌在 B 上验不过」,
+   * 表现为随机掉登录,是最难查的一类问题。
+   */
+  const rawSecret = value.jwtSecret ?? '';
+  if (rawSecret === '') {
+    if (isProduction) {
+      process.stderr.write(
+        '[FATAL] 生产环境必须设置 JWT_SECRET(至少 32 字节)。\n' +
+          '        生成一个: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64url\'))"\n',
+      );
+      process.exit(1);
+    }
+    process.stderr.write(
+      '[WARN] 未设置 JWT_SECRET,已生成临时密钥 —— 进程重启后所有人需要重新登录。\n' +
+        '       正式使用请写进 .env。\n',
+    );
+  }
+
+  return {
+    ...value,
+    ...TUNING,
+    jwtSecret: rawSecret === '' ? randomBytes(48).toString('base64url') : rawSecret,
+    isProduction,
+    isTest: value.nodeEnv === 'test',
+    webPort: value.webPort,
+    contextPrefix,
+    contextBase: contextPrefix === '' ? '/' : `${contextPrefix}/`,
+    apiPrefix: `${contextPrefix}/api`,
+  };
+};
+
+export const config: AppConfig = buildConfig();

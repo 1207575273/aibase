@@ -15,15 +15,14 @@
  *   加一个业务模块也不需要动 main.ts。
  */
 
-import { AuthService } from '../application/auth/auth.service.js';
-import { RoleService } from '../application/role/role.service.js';
-import { UserService } from '../application/user/user.service.js';
-import { config } from '../config/index.js';
-import { buildRepos } from '../infrastructure/persistence/postgres/unit-of-work.js';
-import { ScryptPasswordHasher } from '../infrastructure/security/scrypt-password-hasher.js';
-import { Hs256TokenSigner } from '../infrastructure/security/hs256-token-signer.js';
-import { RsaLoginCrypto } from '../infrastructure/security/rsa-login-crypto.js';
-import type { AppDeps } from '../interface/http/app.js';
+import { AuthService } from '../modules/identity/application/auth.service.js';
+import { RoleService } from '../modules/identity/application/role.service.js';
+import { UserService } from '../modules/identity/application/user.service.js';
+import { config } from '../platform/config/index.js';
+import { buildRepos } from './repos.js';
+import { ScryptPasswordHasher } from '../modules/identity/infra/scrypt-password-hasher.js';
+import { Hs256TokenSigner } from '../modules/identity/infra/hs256-token-signer.js';
+import type { AppDeps } from './app.js';
 import type { AppContext } from './context.js';
 
 /**
@@ -37,11 +36,6 @@ export const buildModules = async (
   const repos = buildRepos(ctx.prisma);
   const hasher = new ScryptPasswordHasher();
   
-  // RSA 密钥在进程内存里生成,不落盘 —— 没有密钥文件可泄漏,且天然随重启轮换。
-  // 生成是异步的,所以 buildModules 是 async。
-  const loginCrypto = new RsaLoginCrypto({ clock: ctx.clock });
-  await loginCrypto.init();
-
   // JWT 签发器。密钥与有效期都来自 config,时钟注入 —— 测试要能把"现在"固定住。
   const signer = new Hs256TokenSigner({
     secret: config.jwtSecret,
@@ -53,8 +47,6 @@ export const buildModules = async (
     userRepo: repos.user,
     hasher,
     signer,
-    loginCrypto,
-    requireEncryptedPassword: config.requireEncryptedPassword,
     ids: ctx.ids,
     clock: ctx.clock,
     logger: ctx.logger.child({ module: 'auth' }),

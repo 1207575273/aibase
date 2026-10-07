@@ -9,9 +9,13 @@ Node.js 通用业务模板。认证鉴权、分页、审计、事务、错误处
 自带**用户 / 角色**两套 CRUD 作示范,含行级数据权限与配套测试 —— 抄的时候一起抄。
 
 ```
-server/  后端(轻量 DDD 四层)   web/  前端 SPA   contracts/  前后端共享契约
-e2e/     端到端(起真进程)      deploy/  Dockerfile / compose / nginx   scripts/  开发脚本
+server/    后端(按模块组织,模块内轻量 DDD 四层)   web/     前端 SPA
+packages/  共享包(contracts: 前后端共享契约)         e2e/     端到端(起真进程)
+deploy/    Dockerfile / compose / nginx              scripts/ 开发脚本   docs/ 项目文档
 ```
+
+一个业务模块落在三处:`packages/contracts/src/<模块>.ts`、`server/src/modules/<模块>/`、
+`web/src/features/<模块>/`。加服务在一级加目录,加共享库放 `packages/` 下。
 
 ### 端口 —— clone 后先定这几个
 
@@ -22,7 +26,7 @@ e2e/     端到端(起真进程)      deploy/  Dockerfile / compose / nginx   sc
 |---|---|---|---|
 | 7101 | 服务入口:开发是后端、生产是 nginx(同号,不用记两套) | `.env` `PORT` | **必改** |
 | 7102 | 前端 dev server | `.env` `WEB_PORT` | **必改** |
-| 7103 | 开发数据库 | `docker-compose.dev.yml` + `.env` `DATABASE_URL` | **必改** |
+| 7103 | [可选] 本机开发库,`pnpm db up` 手动起 | `docker-compose.dev.yml` + `.env` `DATABASE_URL` | 用到才改 |
 | 7104 | 测试环境入口(类生产预演) | `docker-compose.test.yml` | 必改 |
 | 8101 | e2e,由 `PORT+1000` 派生 | 不用配 | 否 |
 
@@ -35,7 +39,8 @@ e2e/     端到端(起真进程)      deploy/  Dockerfile / compose / nginx   sc
 
 Node ≥22.12、hono 4.13.5、zod 4.4.3、vitest 4.1.11、esbuild 0.28.2、pino 10.3.1 |
 Prisma 7.10.0 + adapter-pg + PostgreSQL 17 | React 19.2.8、vite 8.2.2、
-TanStack Router/Query、Tailwind v4、radix-ui、react-hook-form、axios。
+TanStack Router/Query、Tailwind v4、shadcn/ui(源码在 `web/src/components/ui/`,21 个)+ radix-ui、
+react-hook-form、axios、lucide 图标、sonner 提示。只有浅色主题;动画只用 tw-animate-css(弹层进出场)。
 **typescript 6.0.3 不能升 7**(`@typescript-eslint/parser` peer 上限 `<6.1`)。
 
 **Prisma 别用 `@latest` 装** —— `prisma` 的 npm latest 已是 `8.0.0-rc`,与 `@prisma/client`
@@ -43,25 +48,39 @@ TanStack Router/Query、Tailwind v4、radix-ui、react-hook-form、axios。
 `@prisma/adapter-pg`)同版本一起动。`prisma` CLI 同时在根 devDeps 和 server deps 里
 **不是重复**:后者是部署单元的运行时依赖(容器要跑 `migrate deploy`,而 `--prod` 只带 deps)。
 
-**安全相关零第三方依赖**:scrypt / 手写 HS256 / Web Crypto RSA-OAEP+AES-GCM。
-**shadcn 不当 npm 包用** —— `pnpm dlx shadcn@latest add <组件>` 生成源码到仓库。
+**安全相关零第三方依赖**:scrypt / 手写 HS256。
+**shadcn 不当 npm 包用** —— 组件源码已预装在仓库里,**业务开发不要现场 `shadcn add`**(沙箱可能连不上组件仓库)。
+维护者补组件时注意:新版 CLI 会把 `cn` 写成 `import { cn } from "cn"` 并新增 npm 包 `cn`,
+要改回 `@/lib/utils` 并删掉那个包;遇到"是否覆盖 button.tsx"一律选否。
 
 ## 三、硬约束(绝不破)
 
 ### 分层
 
-`interface -> application -> domain`,infrastructure 实现 domain 定义的接口。
-domain 只放类型 + 接口 + 纯函数,零 IO;业务逻辑在 application。
+```
+server/src/
+  main.ts        进程入口,不随业务增长
+  composition/   装配: context / modules / repos(仓储清单)/ app(路由总装 + 全站护栏测试)
+  platform/      横切基础设施: config / db / logger / http(错误出口、校验、requirePermission)
+  lib/           纯类型与纯函数: app-error / clock / page / actor / unit-of-work 端口 ...
+  modules/<m>/   业务模块: domain / application / infra / interfaces/http
+```
 
-六条边界由 eslint 守着:R1 domain 不依赖外层 / R1b application 不依赖 infrastructure /
-R2 跨域只走对方 domain / R3 只有 interface 能 import 契约 / R4 禁裸读 `process.env` /
-R5 前端业务层禁 import axios。**加规则必须做注入探针**(写一行违规代码确认真报错)。
+模块内 `interfaces -> application -> domain`,infra 实现 domain 定义的接口。
+domain 只放类型 + 接口 + 纯函数,零 IO;业务逻辑在 application。
+自带一个模块 `identity`(登录 / 用户 / 角色),是加模块的抄写样板。
+
+边界由 eslint 守着:R0 lib 只依赖 lib、platform 不依赖业务模块 / R1 domain 只依赖 lib 与 domain /
+R1b application 不依赖 infra、interfaces、platform / R2 跨模块只走对方 domain /
+R3 只有 interfaces 与 platform/http 能 import 契约 / R4 禁裸读 `process.env` /
+R5 前端业务层禁 import axios。**加规则或调整目录都必须做注入探针**(写一行违规代码确认真报错)。
 
 ### 代码组织
 
 - **不搞 CQRS**,读写都走 Repository
 - **一个聚合一个 Service**。方法超 ~80 行 / 需独占依赖 / 跨聚合事务,满足任一才拆 usecase
-- 装配在 `composition/modules.ts`,**加业务不改 main.ts**
+- 装配在 `composition/`(modules.ts 建服务、repos.ts 登记仓储、app.ts 挂路由),**加业务不改 main.ts**
+- 事务: service 在 deps 里声明 `UnitOfWork<{ 要用的仓储 }>`,全量清单只在 `composition/repos.ts`
 
 ### HTTP
 
@@ -80,6 +99,13 @@ R5 前端业务层禁 import axios。**加规则必须做注入探针**(写一�
 - 业务表必须有 `createdAt/updatedAt/createdBy/updatedBy`,业务表 `createdBy` **非空**
   (行级权限的锚点)。系统表 `sys_` 可空,**这些无主行对 `dataScope=SELF` 不可见**
 - **不用 `deletedAt` 软删**,状态用业务字段表达
+- **数据库由人配置,模板不自动拉起**:`DATABASE_URL` + `DATABASE_SCHEMA` 都必填,schema 按环境加前缀
+  后缀 `<项目>_dev` / `_test` / `_prod`,同一项目的几套环境在库里排在一起(不符合只告警)。沙箱是容器,起不了容器,库由平台提供。沙箱里多个项目共用一个 PG,
+  迁移与运行时读同一个变量。**迁移 SQL 禁止写死 `"public".`**(`tests/migrations-schema-agnostic.test.ts` 拦)
+- **改表只用 `pnpm db migrate --name <改了什么>`**:内部用 `prisma migrate diff` 生成迁移并应用、重新生成 Client。
+  不用 `prisma migrate dev`(要建影子库,沙箱的共享 PG 没有建库权限,报 P3014)
+- **`pnpm db migrate` / `pnpm db reset` 只许在开发 schema 上执行**(判断见 `scripts/db.mjs` 的 `isDisposableSchema`),
+  测试 / 生产只用 `pnpm db deploy`。**AI 执行 reset 会被 Prisma 7 自身拦下**,必须向人说明后果并取得明确同意,不许绕过
 - 错误码在各域 `*.errors.ts` 用 `as const` 登记,**是对外契约的一部分**
 
 ### 契约包
@@ -91,7 +117,7 @@ R5 前端业务层禁 import axios。**加规则必须做注入探针**(写一�
 
 ### 权限
 
-- 权限码真源在 `contracts/src/permissions.ts` 的 `as const`,**不建 Permission 表**
+- 权限码真源在 `packages/contracts/src/permissions.ts` 的 `as const`,**不建 Permission 表**
 - 受保护路由**必须挂 `secured` 子 app**;每个路由**逐个挂 `requirePermission`**,
   有意不需要权限的登记进 `app.ts` 的 `AUTHENTICATED_ONLY_PATHS`
 - 主体显式传参 `service.method(input, actor)`,**不用 AsyncLocalStorage**
@@ -106,17 +132,17 @@ R5 前端业务层禁 import axios。**加规则必须做注入探针**(写一�
 - **登录态用 JWT + `Authorization` 头,不用 Cookie**:没有 CSRF、不受 Secure/SameSite 管辖。
   **不要为了"顺手"加回 Cookie**(e2e 有反向断言守着)
 - **三条固有代价不是 bug**:改权限要等令牌过期、登出与禁用踢不掉已发的令牌、
-  localStorage 被 XSS 可读。详见 `domain/auth/token-signer.ts`
+  localStorage 被 XSS 可读。详见 `server/src/modules/identity/domain/token-signer.ts`
 - JWT 手写 HS256,两处**绝不能动**:校验 `alg` 头(防 `alg:none`)、`timingSafeEqual` 比签名。
   `hs256-token-signer.test.ts` 有 10 条攻击面用例守着
 - `JWT_SECRET` 生产必须设(不设拒绝启动)。换掉它 = 强制全员下线,唯一的全局吊销手段
 - 用户不存在与密码错误必须**同码、同文案、相近耗时**
-- 密码不以明文进请求体(RSA+AES + 一次性 nonce)。**这不能替代 HTTPS**
+- 登录密码明文提交,**传输安全靠 HTTPS**。前端 RSA 加密已移除(理由见 `packages/contracts/src/auth.ts`),需要过等保时从 git 历史恢复
 - **连接串绝不整条进日志**(带密码),用 `describeConnection()`
 
 ### 配置与路径
 
-- **禁止裸读 `process.env`**,一律从 `src/config/index.ts` 取
+- **禁止裸读 `process.env`**,一律从 `src/platform/config/index.ts` 取
 - 路径**不要用 `import.meta.url` 数层级**(源码与 dist 层数不同,只炸生产),用 `config.REPO_ROOT`
 - **contextPath 默认空**,留给"一台 nginx 按路径反代多个应用"。前端**禁止硬编码前缀**,
   用 `import.meta.env.BASE_URL`;后端用 `config.contextPrefix / contextBase / apiPrefix`
@@ -132,13 +158,13 @@ R5 前端业务层禁 import axios。**加规则必须做注入探针**(写一�
 
 ### 测试
 
-- 单测直接连**真实 PostgreSQL**,**不用 `vi.mock`**。跑测试前 `pnpm db:up`
-- 隔离靠**每个测试文件一个独立 database**:globalSetup 建模板库跑迁移,
-  各测试 `CREATE DATABASE ... TEMPLATE` 克隆。
-  [约束] TEMPLATE 源库**不能有活动连接**,globalSetup 建完必须彻底断开
+- 单测直接连**真实 PostgreSQL**,**不用 `vi.mock`**。跑测试前在 `.env` 配好 `DATABASE_URL`(测试在里面建 `tmp_` 开头的临时 schema,不碰你的 `_dev` schema)
+- 隔离靠**每个测试文件一个临时 schema**:`setupTestDb()` 在开发库里建 schema 并重放迁移 SQL,
+  用完 `DROP SCHEMA ... CASCADE`。不需要 CREATEDB 权限,沙箱的共享 PG 上同样成立。
+  globalSetup 每次用真实 `prisma migrate deploy` 往探针 schema 跑一遍,守住上线路径
 - 命名 `should_<行为>_when_<前置>`;断错误只断 `code` 不断 message
 - 照抄:`role.service.test.ts`(最快的标准形状)/ `user.service.test.ts`(多事务与哈希)/
-  `user.routes.test.ts`(HTTP 层)/ `actor.test.ts`(domain 纯函数)
+  `user.routes.test.ts`(HTTP 层)/ `lib/actor.test.ts`(纯函数)
 - **`app.test.ts` 的两条遍历用例是全站护栏**:匿名断言全 401(守忘挂 `authenticate`)、
   零权限账号断言全 403(守忘挂 `requirePermission`)。改动后**必须做注入探针**
 - **`main.ts` 的组装没有测试覆盖**(测的是 `buildApp` 的内层 app),已知盲区
@@ -146,24 +172,24 @@ R5 前端业务层禁 import axios。**加规则必须做注入探针**(写一�
 ## 四、怎么开发
 
 ```bash
-pnpm install && cp .env.example .env
-pnpm dev                            # 自动拉起数据库容器,再起后端 + 前端
-pnpm db:deploy && pnpm db:seed      # 首次建表灌数据。账号 admin / admin12345
+pnpm install && cp .env.example .env  # 然后填 DATABASE_URL / DATABASE_SCHEMA
+pnpm db up                          # [可选] 本机没有 PG 时用 docker 起一个,沙箱里不可用
+pnpm dev                            # 起后端 + 前端(不会自动拉起数据库)
+pnpm db deploy && pnpm db seed      # 首次建表灌数据。账号 admin / admin12345
 ```
 
 | 命令 | 说明 |
 |---|---|
-| `pnpm dev` / `kill` | 起全栈(含数据库) / 清端口 |
-| `pnpm db:up` / `db:down` | 起停开发数据库 |
-| `pnpm db:migrate` / `db:seed` / `db:reset` | 迁移 / 种子 / 重建 |
+| `pnpm dev` / `kill` | 起后端 + 前端 / 清端口 |
+| `pnpm db <子命令>` | 数据库唯一入口:`up` / `down` / `deploy` / `seed` / `migrate` / `reset` / `status` / `studio` / `generate` |
 | `pnpm logs` | 查 JSONL 日志 |
 | `pnpm typecheck` / `lint` / `test` / `test:e2e` | 检查与测试 |
-| `pnpm test:all` | **提交前跑这个** |
+| `pnpm verify` | **提交前跑这个** |
 | `pnpm build` / `start` | 打包 / 跑生产产物 |
 
 **`build` 只打包不做类型检查**(96 秒 -> 6 秒),类型错误只有 `typecheck` 会报。
 只验一处:`pnpm --filter @app/server exec vitest run <文件>`。
-**测试的模板库每次重建不要加缓存** —— 那几秒买的是「迁移文件每次真实执行一遍」。
+**测试的探针 schema 每次真跑 migrate deploy,不要加缓存** —— 那几秒买的是「迁移文件每次真实执行一遍」。
 
 ## 五、加一个业务模块
 
@@ -186,18 +212,18 @@ postgres  数据库,数据在命名卷里
 ```
 
 ```bash
-cd deploy && cp ../.env.compose.example .env    # 至少填 POSTGRES_PASSWORD 与 JWT_SECRET
+cd deploy && cp .env.compose.example .env    # 至少填 POSTGRES_PASSWORD 与 JWT_SECRET
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 后端**不托管前端静态资源**(`SERVE_WEB` 已删)—— 静态资源、压缩、缓存头全归 nginx。
 
-**三份 compose**:`dev.yml`(只有 PG,7103)/ `test.yml`(四服务,7104,**测试环境 =
+**三份 compose**:`dev.yml`([可选] 只有 PG,7103,`pnpm db up` 手动起)/ `test.yml`(四服务,7104,**测试环境 =
 生产的预演**,拓扑与 prod 一致、`NODE_ENV` 也是 production)/ `prod.yml`(四服务,7101)。
 
 - 三份都显式写顶层 `name:` —— 默认项目名取自目录名,不写会共用 `deploy`,
   对生产栈 `down -v` 会把开发数据库容器一起删掉(踩过)
-- 单元测试与 e2e 连的是**开发库**,靠独立 database 隔离,**不要为跑测试单独起 PG 实例**
+- 单元测试与 e2e 连的是 `DATABASE_URL` 指向的库,靠临时 schema 隔离,**不要为跑测试单独起 PG 实例**
 - 不用 `override.yml`(自动加载,容易带错配置)、不用 profiles(忘带参数就起错东西)
 - 生产那份**不叫 `docker-compose.yml`**:默认文件名意味着随手 `docker compose up` 就起生产
 - `-f a.yml -f b.yml` 是**合并**语义不是"起两个",同名服务会被合并
@@ -238,8 +264,6 @@ API 的 404 返回纯文本:Hono **子 app 的 notFound 不生效**,root 也要�
 只有断言具体错误码的测试才抓得住 | `skipDuplicates` 报错:那是 SQLite 限制,PG 可用
 
 **测试与前端** — Git Bash 的 `/tmp` 与 Node 的 `/tmp` 不是同一个目录,测试脚本别用 |
-断言"密文被篡改应失败"却通过:改 base64 末位可能只动到补位比特,要在字节层面翻转 |
-`crypto.subtle` 是 undefined:只在安全上下文暴露,`canEncrypt()` 探测后退回明文 |
 `getRandomValues` 报类型错:不能从 crypto 解构
 
 **日志与进程** — pino-roll 生成 .log 而非 .jsonl:`extension` 只在文件名不含扩展名时生效 |
@@ -248,7 +272,7 @@ Windows 终端 curl 发中文乱码:用 `--data-binary @文件`。
 **同理 `node -e` 里带反引号会被 bash 当命令替换** —— 复杂脚本写成文件再跑
 
 **容器** — 镜像 build 成功但 run 必炸:pnpm workspace 是软链结构,手工 COPY 搬不全,
-用 `pnpm deploy --filter --prod --legacy`。**CI 只跑 build 发现不了,必须真 up 一次** |
+用 `pnpm deploy --filter --prod --legacy`。**只 build 不 run 发现不了** |
 `docker build` 卡在 `prisma generate`:`prisma.config.ts` 别在顶层抛异常(generate 不连库) |
 应用正常但 docker 一直 unhealthy:`HEALTHCHECK` 里用了 build ARG,运行时展开为空,
 改用 node 读 `process.env.PORT`(k8s 里表现为 pod 反复重启) |

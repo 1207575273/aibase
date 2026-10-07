@@ -32,7 +32,7 @@ generator client {
   output   = "../src/generated/prisma"
 }
 
-// Prisma 7 起 datasource 里**不再写 url** —— 迁移用的连接串在根目录 prisma.config.ts,
+// Prisma 7 起 datasource 里**不再写 url** —— 迁移用的连接串在 server/prisma.config.ts,
 // 运行时连接由 PrismaClient 构造时传入的 driver adapter 提供。
 // 这消灭了 v6 时代"schema 里一个 url、代码里一个 adapter,两者可能指向不同库"的隐患。
 datasource db {

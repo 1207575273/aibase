@@ -19,7 +19,7 @@ set -eu
 echo "[migrate] 应用数据库迁移..."
 # migrate deploy 是幂等的: 已应用的迁移会跳过,只补没跑过的。
 # 用 deploy 而不是 dev —— dev 会在检测到漂移时尝试重建库,那在生产是灾难。
-./node_modules/.bin/prisma migrate deploy
+./node_modules/.bin/prisma migrate deploy --config server/prisma.config.ts
 
 # 种子。全程 upsert,重复执行不会报错,也不会改已存在账号的密码。
 # 接管一个已有数据的库、不想让它碰用户表时,设 SKIP_SEED=1。

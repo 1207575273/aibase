@@ -27,7 +27,7 @@
 #
 # 用法:
 #   cd deploy
-#   cp ../.env.compose.example .env.test    # 填 POSTGRES_PASSWORD 与 JWT_SECRET
+#   cp .env.compose.example .env.test    # 填 POSTGRES_PASSWORD 与 JWT_SECRET
 #   docker compose -f docker-compose.test.yml --env-file .env.test up -d --build
 
 name: keel-test
@@ -35,6 +35,13 @@ name: keel-test
 services:
   postgres:
     image: postgres:17-alpine
+    # [统一识别标签] 与 dev/prod 同一套固定键,一条过滤器横跨三套栈:
+    #   docker ps -a --filter label=app.project=keel
+    labels:
+      app.project: keel
+      app.title: Keel
+      app.env: test
+      app.service: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-keel}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请设置 POSTGRES_PASSWORD}
@@ -57,9 +64,15 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     command: ['./start-migrate.sh']
+    labels:
+      app.project: keel
+      app.title: Keel
+      app.env: test
+      app.service: migrate
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-keel}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-keel}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-keel_test}
       # 测试环境的种子密码通常是固定的,方便 QA 反复登录
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
       SKIP_SEED: ${SKIP_SEED:-0}
@@ -74,12 +87,18 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     init: true
+    labels:
+      app.project: keel
+      app.title: Keel
+      app.env: test
+      app.service: app
     environment:
       # [与生产一致] NODE_ENV 就是 production ——
       # 测试环境要验的是生产模式下的行为(JWT_SECRET 强制校验、日志走 JSON 等)。
       # 设成 development 会让这里验过的东西在生产不成立,那就白验了。
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-keel}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-keel}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-keel_test}
       JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
       JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-604800}
       # 唯一有意与生产不同的一项: 测试环境默认开 debug,排查问题方便
@@ -97,6 +116,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.nginx
+    labels:
+      app.project: keel
+      app.title: Keel
+      app.env: test
+      app.service: nginx
     ports:
       # 7104 —— 与生产的 7101 错开,两套环境可以在同一台机器上并存。
       # 端口连号: 7101 生产入口 / 7102 前端 dev / 7103 开发库 / 7104 测试环境入口
@@ -113,3 +137,7 @@ services:
 
 volumes:
   pgdata:
+    labels:
+      app.project: keel
+      app.title: Keel
+      app.env: test

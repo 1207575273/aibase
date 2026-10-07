@@ -13,15 +13,15 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { registerShutdown } from './bootstrap/shutdown.js';
-import { config, REPO_ROOT } from './config/index.js';
-import { accessUrls } from './infrastructure/system/access-urls.js';
+import { registerShutdown } from './platform/shutdown.js';
+import { config, REPO_ROOT } from './platform/config/index.js';
+import { accessUrls } from './platform/access-urls.js';
 import { createContext } from './composition/context.js';
-import { describeConnection } from './infrastructure/persistence/postgres/prisma-client.js';
+import { describeConnection } from './platform/db/prisma-client.js';
 import { buildModules } from './composition/modules.js';
-import { buildApp } from './interface/http/app.js';
-import type { AppEnv } from './interface/http/env.js';
-import { handleError, handleNotFound } from './interface/http/handle-error.js';
+import { buildApp } from './composition/app.js';
+import type { AppEnv } from './platform/http/env.js';
+import { handleError, handleNotFound } from './platform/http/handle-error.js';
 
 /** 版本号单一来源:从 package.json 读。不硬编码 —— 硬编码的版本号迟早是错的。 */
 const readVersion = (): string => {
@@ -37,6 +37,13 @@ const bootstrap = async (): Promise<void> => {
   const startedAt = new Date();
   const ctx = await createContext();
   const logger = ctx.logger;
+
+  // schema 按环境加后缀(_dev / _test / _prod),看日志就知道连的是哪套环境。只提示,不拦截。
+  if (!/_(dev|test|prod)$/.test(config.databaseSchema)) {
+    logger.warn('DATABASE_SCHEMA 未按环境后缀命名,建议 <项目>_dev / <项目>_test / <项目>_prod', {
+      schema: config.databaseSchema,
+    });
+  }
 
   const app = buildApp({
     ...(await buildModules(ctx)),
@@ -92,6 +99,7 @@ const bootstrap = async (): Promise<void> => {
       env: config.nodeEnv,
       // 只打 host:port/dbname —— 连接串里有密码,整条进日志就是凭证泄漏
       db: describeConnection(config.databaseUrl),
+      schema: config.databaseSchema,
     });
   });
 

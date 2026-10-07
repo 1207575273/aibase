@@ -15,7 +15,6 @@ import { useCallback } from 'react';
 import { authApi } from '@/api/auth';
 import { isApiError } from '@/api/http';
 import { tokenStore } from '@/api/token-store';
-import { canEncrypt, encryptPassword } from './encrypt-password';
 
 /** queryKey 集中定义,避免"这里写 ['me'] 那里写 ['auth','me']"导致缓存对不上。 */
 export const authKeys = {
@@ -57,43 +56,13 @@ export const usePermission = (): ((code: string) => boolean) => {
   );
 };
 
-/**
- * 登录。密码优先走加密通道,并在必要时自动重试。
- *
- * 两种降级情况:
- * 1. **拿不到 crypto.subtle** —— 浏览器只在安全上下文(https 或 localhost)
- *    暴露它。用局域网 IP 走 http 访问时就没有,此时退回明文通道。
- *    (真要在这种场景下也强制加密,得上 https;后端把
- *     AUTH_REQUIRE_ENCRYPTED_PASSWORD 设为 true 会直接拒绝明文,不会静默降级。)
- * 2. **服务端密钥已轮换 / nonce 过期** —— 后端重启会换密钥,
- *    此时自动重取挑战再试一次,而不是把"服务刚重启过"显示成"密码错误"。
- */
+/** 登录。密码明文提交,传输安全由 HTTPS 负责。 */
 export const useLogin = () => {
   const queryClient = useQueryClient();
 
-  /** 返回登录响应而不是 void —— 令牌在响应体里,调用方要拿它落盘。 */
-  const attempt = async (input: { username: string; password: string }) => {
-    if (!canEncrypt()) {
-      return authApi.login({ username: input.username, password: input.password });
-    }
-    const challenge = await authApi.loginChallenge();
-    const passwordCipher = await encryptPassword(input.password, challenge);
-    return authApi.login({ username: input.username, passwordCipher });
-  };
-
   return useMutation({
     mutationFn: async (input: { username: string; password: string }) => {
-      let result;
-      try {
-        result = await attempt(input);
-      } catch (e) {
-        // 密钥/nonce 失效:重取挑战再试一次。只重试一次,避免死循环。
-        if (isApiError(e) && e.code === 'AUTH_LOGIN_KEY_EXPIRED') {
-          result = await attempt(input);
-        } else {
-          throw e;
-        }
-      }
+      const result = await authApi.login(input);
 
       // 令牌落盘。必须在 invalidate 之前 —— 否则紧接着的 /auth/me 还没有凭证可带,
       // 会立刻 401,表现为"登录成功了却马上被踢回登录页"。

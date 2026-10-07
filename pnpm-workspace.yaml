@@ -1,7 +1,8 @@
-# 扁平结构:每个一级目录就是一个 workspace 包,不再有 apps/ packages/ 分类层。
-# 加新服务(如 ocr-server)时在这里追加一行。
+# 一级目录即服务:server / web / e2e 各是一个 workspace 包;
+# 被多方依赖的共享库统一放 packages/ 下(目前只有 contracts)。
+# 加新服务(如 worker)在这里追加一行;加共享库放进 packages/ 即自动纳入。
 packages:
   - "server"
   - "web"
   - "e2e"
-  - "contracts"
+  - "packages/*"

@@ -1,0 +1,21 @@
+# 换行符统一为 LF:Windows 上开发、Linux 沙箱与容器里运行。
+# 这里的设置优先于本机 git 的 core.autocrlf,检出到工作区也是 LF,
+# 避免同一个文件在不同机器上换行符不一致、混出"整文件改动"的 diff。
+* text=auto eol=lf
+
+# shell 脚本必须 LF,否则容器里报 "/bin/sh^M: bad interpreter"
+*.sh text eol=lf
+
+# 二进制文件:不做换行转换,不做文本 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary

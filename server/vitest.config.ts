@@ -8,14 +8,17 @@ import { defineConfig } from 'vitest/config';
  *   其中一份的 include glob 匹配零文件却没人发现。模板只留一档 ——
  *   测试要么跑要么不存在,不要"有一档从来没人跑过"。
  *
- * 为什么可以并行: 每个测试文件用自己的独立 database(见 tests/helpers/test-db.ts,
- *   靠 CREATE DATABASE ... TEMPLATE 从模板库克隆),连接串显式传给 createPrismaClient
+ * 为什么可以并行: 每个测试文件用自己的临时 schema(见 tests/helpers/test-db.ts,
+ *   建 schema 后重放迁移 SQL),schema 显式传给 createPrismaClient
  *   而不是改全局 process.env,所以文件之间零共享状态。
  */
 export default defineConfig({
   test: {
     include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
     globalSetup: ['./tests/helpers/global-setup.ts'],
+    // DATABASE_SCHEMA 是必填项。测试一律显式使用临时 schema,这里只是占位让 config 校验通过,
+    // 名字故意不存在 —— 有代码误用它会直接报表不存在,而不是悄悄读写开发者的 _dev schema。
+    env: { DATABASE_SCHEMA: 'tmp_test_placeholder' },
     // 单个用例超过 15s 基本就是卡死而不是慢,早点失败早点看到。
     testTimeout: 15_000,
     /*

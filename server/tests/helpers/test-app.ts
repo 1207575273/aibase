@@ -14,10 +14,10 @@ import type { Hono } from 'hono';
 import { v7 as uuidv7 } from 'uuid';
 import { buildModules } from '../../src/composition/modules.js';
 import { createContext, type AppContext } from '../../src/composition/context.js';
-import { silentLogger } from '../../src/infrastructure/logger/silent-logger.js';
-import { ScryptPasswordHasher } from '../../src/infrastructure/security/scrypt-password-hasher.js';
-import { buildApp } from '../../src/interface/http/app.js';
-import type { AppEnv } from '../../src/interface/http/env.js';
+import { silentLogger } from '../../src/platform/logger/silent-logger.js';
+import { ScryptPasswordHasher } from '../../src/modules/identity/infra/scrypt-password-hasher.js';
+import { buildApp } from '../../src/composition/app.js';
+import type { AppEnv } from '../../src/platform/http/env.js';
 import { setupTestDb, type TestDb } from './test-db.js';
 
 export const TEST_ADMIN = { username: 'admin', password: 'admin-pass-12345' };
@@ -75,7 +75,11 @@ export const postJson = (
 
 export const setupTestApp = async (): Promise<TestApp> => {
   const db = await setupTestDb();
-  const ctx = await createContext({ connectionString: db.connectionString, logger: silentLogger });
+  const ctx = await createContext({
+    connectionString: db.connectionString,
+    schema: db.schema,
+    logger: silentLogger,
+  });
   const app = buildApp({
     ...(await buildModules(ctx)),
     version: '0.0.0-test',
