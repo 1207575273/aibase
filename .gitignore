@@ -24,6 +24,9 @@ data/
 .env
 .env.local
 .env.*.local
+# 测试 / 生产环境的连接串(init-project 写入 deploy/ 下,含密码)
+.env.test
+.env.prod
 
 # 日志
 logs/
