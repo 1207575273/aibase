@@ -10,11 +10,11 @@ import { describe, expect, it } from 'vitest';
 import { isDisposableSchema, migrationDirName, toMigrationName } from '../../scripts/db.mjs';
 
 describe('isDisposableSchema', () => {
-  it.each(['keel_dev', 'order_2_dev'])('should_allow_%s_when_schema_is_dev', (schema) => {
+  it.each(['aibase_dev', 'order_2_dev'])('should_allow_%s_when_schema_is_dev', (schema) => {
     expect(isDisposableSchema(schema)).toBe(true);
   });
 
-  it.each(['keel_test', 'keel_prod', 'dev_keel', 'keel_devx', '_dev', 'public', '', undefined])(
+  it.each(['aibase_test', 'aibase_prod', 'dev_aibase', 'aibase_devx', '_dev', 'public', '', undefined])(
     'should_refuse_%s_when_schema_is_not_dev',
     (schema) => {
       expect(isDisposableSchema(schema)).toBe(false);

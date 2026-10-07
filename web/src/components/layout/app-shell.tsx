@@ -55,7 +55,7 @@ export const AppShell = ({ children }: { children: ReactNode }): React.JSX.Eleme
       {/* 侧边栏 */}
       <aside className="flex w-56 shrink-0 flex-col border-r bg-muted/30">
         <div className="flex h-14 items-center border-b px-4">
-          <span className="font-semibold">Keel</span>
+          <span className="font-semibold">AIBase</span>
         </div>
 
         <nav className="flex-1 space-y-1 p-2">

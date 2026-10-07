@@ -18,25 +18,25 @@
 # 后果是实打实踩到过的: 对生产栈执行 `down -v`,会把这个开发数据库容器
 # 一起停掉删掉(同一个项目下的容器被视作一组)。在生产机上更危险。
 # 显式命名之后两个栈完全隔离,互相看不见。
-name: keel-dev
+name: aibase-dev
 
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: keel-dev-postgres
+    container_name: aibase-dev-postgres
     # [统一识别标签] 三套栈(dev/test/prod)的容器与卷都打 app.project=项目名。
-    # compose 自带的 com.docker.compose.project 每个栈一个值(keel-dev/keel-test/keel),
+    # compose 自带的 com.docker.compose.project 每个栈一个值(aibase-dev/aibase-test/aibase),
     # 没法用一条过滤器横跨三套;固定键则可以:
-    #   docker ps -a --filter label=app.project=keel
+    #   docker ps -a --filter label=app.project=aibase
     labels:
-      app.project: keel
-      app.title: Keel
+      app.project: aibase
+      app.title: AIBase
       app.env: dev
       app.service: postgres
     environment:
-      POSTGRES_USER: keel
-      POSTGRES_PASSWORD: keel_dev_password
-      POSTGRES_DB: keel_dev
+      POSTGRES_USER: aibase
+      POSTGRES_PASSWORD: aibase_dev_password
+      POSTGRES_DB: aibase_dev
       # 测试会频繁 CREATE DATABASE ... TEMPLATE,给足权限
       POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
     ports:
@@ -47,11 +47,11 @@ services:
       # 一台开发机上跑多个项目是常态,端口必须按项目分段。
       - '7103:5432'
     volumes:
-      - keel-dev-pgdata:/var/lib/postgresql/data
+      - aibase-dev-pgdata:/var/lib/postgresql/data
     healthcheck:
       # dev.mjs 靠它判断"数据库能用了没",不能只看容器 Up ——
       # 容器起来到 PG 真正接受连接之间有几秒空窗
-      test: ['CMD-SHELL', 'pg_isready -U keel -d keel_dev']
+      test: ['CMD-SHELL', 'pg_isready -U aibase -d aibase_dev']
       interval: 3s
       timeout: 3s
       retries: 20
@@ -59,8 +59,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  keel-dev-pgdata:
+  aibase-dev-pgdata:
     labels:
-      app.project: keel
-      app.title: Keel
+      app.project: aibase
+      app.title: AIBase
       app.env: dev

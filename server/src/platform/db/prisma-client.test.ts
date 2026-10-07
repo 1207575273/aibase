@@ -18,13 +18,13 @@ import { describeConnection } from './prisma-client.js';
 describe('describeConnection', () => {
   it('should_hide_password_when_describing_connection', () => {
     const described = describeConnection(
-      'postgresql://keel:super_secret_password@db.internal:5432/keel_prod',
+      'postgresql://aibase:super_secret_password@db.internal:5432/aibase_prod',
     );
 
     // 这是安全断言,不是格式断言: 连接串整条进日志就是凭证泄漏
     expect(described).not.toContain('super_secret_password');
-    expect(described).not.toContain('keel:');
-    expect(described).toBe('db.internal:5432/keel_prod');
+    expect(described).not.toContain('aibase:');
+    expect(described).toBe('db.internal:5432/aibase_prod');
   });
 
   it('should_fall_back_to_placeholder_when_connection_string_is_invalid', () => {

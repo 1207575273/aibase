@@ -35,8 +35,8 @@ RUN pnpm --filter @app/web build
 # ── 阶段 2:运行时 ──────────────────────────────────────────────
 FROM nginx:1.27-alpine AS runtime
 
-# [镜像识别标签] 与 app 镜像、compose 容器同一套键: docker images --filter label=app.project=keel
-LABEL app.project="keel" app.title="Keel" app.service="nginx"
+# [镜像识别标签] 与 app 镜像、compose 容器同一套键: docker images --filter label=app.project=aibase
+LABEL app.project="aibase" app.title="AIBase" app.service="nginx"
 
 # 换掉默认站点配置。default.conf 里那个 listen 80 的 server 块必须去掉,
 # 否则两个 server 块都监听会导致请求落到哪个取决于顺序,行为不确定。

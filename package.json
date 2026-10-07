@@ -1,9 +1,9 @@
 {
-  "name": "keel",
+  "name": "aibase",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Keel",
+  "description": "AIBase",
   "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=22.12"

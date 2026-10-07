@@ -69,10 +69,10 @@ WORKDIR /app
 
 # [镜像识别标签] 与 compose 里容器的 app.* 标签同一套键。
 # 镜像不分环境(test/prod 用同一个镜像正是测试环境的意义),所以只有 project 和 service:
-#   docker images --filter label=app.project=keel
+#   docker images --filter label=app.project=aibase
 # app.title 是中文显示名,给人看(docker inspect / Portainer);
 # 过滤永远用 app.project —— 中文值在 GBK 终端里做 --filter 容易因编码错配失灵
-LABEL app.project="keel" app.title="Keel" app.service="app"
+LABEL app.project="aibase" app.title="AIBase" app.service="app"
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
