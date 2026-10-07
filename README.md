@@ -64,20 +64,21 @@ deploy/      Dockerfile / compose / nginx 配置
 
 ## 部署
 
-生产是 **nginx 作为唯一入口**的四服务编排,对外只开一个端口:
+生产是 **nginx 作为唯一入口**的三服务编排,对外只开一个端口。**数据库不在编排里**,由人配置:
 
 ```
 nginx(7101) ──┬── /       前端静态资源(gzip + 缓存头 + SPA fallback)
               └── /api/   反代到 app
 app       只跑 API,不暴露端口,无状态
 migrate   一次性容器:迁移 + 种子,跑完退出;app 等它成功才启动
-postgres  数据库,数据在命名卷里
 ```
+
+连接串写在 `deploy/.env.prod` / `deploy/.env.test`(不入库,init-project 生成),
+必须有 `DATABASE_URL`、`DATABASE_SCHEMA`、`JWT_SECRET`,缺了 compose 直接报错:
 
 ```bash
 cd deploy
-cp .env.compose.example .env    # 至少填 POSTGRES_PASSWORD 和 JWT_SECRET
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
 
 对外端口默认 7101,与开发态后端一致 —— 不用记两个号。改端口设 `APP_PORT`。

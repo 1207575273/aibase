@@ -1,63 +1,24 @@
-# 生产编排 —— 四个服务,对外只开一个端口。
+# 生产环境:nginx 作为唯一入口,对外只开一个端口。
 #
 #   nginx    唯一入口(7101)。发前端静态资源 + 把 /api 反代给 app
-#   app      只跑 API,不暴露端口,无状态
-#   migrate  一次性容器:跑迁移 + 灌种子,跑完就退出
-#   postgres 数据库,数据在命名卷里
+#   app      只跑 API,不暴露端口,无状态(可多实例)
+#   migrate  一次性容器: migrate deploy + seed,跑完退出。app 等它成功才启动
 #
-# 启动顺序由 depends_on 的条件保证:
-#   postgres 健康 -> migrate 跑完并成功退出 -> app 起来 -> nginx 起来
-# 没有这些条件的话,app 会在数据库还没就绪时启动、在表还没建好时查询,
-# 表现为一堆随机的连接错误,重启几次又"好了",最难查的那种。
+# 数据库不在这里起 —— 由人配置(与开发 / 测试同一条原则),连接串写在 deploy/.env.prod(不入库,
+# init-project 生成)。必须有的键:
+#   DATABASE_URL     postgresql://用户:密码@主机:5432/库名
+#   DATABASE_SCHEMA  <项目>_prod
+#   JWT_SECRET       至少 32 字节;换掉它 = 全员重新登录
+# 可选: SEED_ADMIN_PASSWORD(不设则 seed 随机生成并打印一次)、SKIP_SEED=1、APP_PORT、LOG_LEVEL、CONTEXT_PATH
 #
-# 用法(在本目录):
-#   cp .env.example ../.env   # 至少要设 JWT_SECRET 与 POSTGRES_PASSWORD
-#   docker compose up -d --build
-#   docker compose logs -f app
+# 启动(在 deploy/ 目录):
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 #
-# [注意] context 是 `..`(仓库根)而不是本目录 —— Dockerfile 要 COPY 整个仓库,
-# 而它自己住在 deploy/ 下,所以 context 与 dockerfile 必须分开写。
-
-# [必须显式声明项目名] 默认项目名取自目录名,而 docker-compose.dev.yml 也在 deploy/ 下,
-# 两者会共用项目名 "deploy" —— 对本栈执行 `down -v` 会把开发数据库容器一起删掉。
-# 踩到过一次,见 CLAUDE.md 踩坑第 27 条。
+# [注意] 这份文件刻意不叫 docker-compose.yml: 默认文件名意味着随手 docker compose up 就起生产。
+# 顶层 name 必须写 —— 不写会用目录名 deploy 当项目名,与其他栈混在一起。
 name: aibase
 
 services:
-  postgres:
-    image: postgres:17-alpine
-    # [统一识别标签] 键固定为 app.*,值随项目走 —— 一条过滤器横跨三套栈:
-    #   docker ps -a --filter label=app.project=aibase
-    # compose 自带的 com.docker.compose.project 做不到(每个栈一个值)。
-    labels:
-      app.project: aibase
-      app.title: AIBase
-      app.env: prod
-      app.service: postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-aibase}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请设置 POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-aibase}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      # app 与 migrate 都靠它判断"数据库能用了没"。
-      # 只看容器 Up 是不够的 —— 容器起来到 PG 真正接受连接之间有几秒空窗。
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-aibase} -d ${POSTGRES_DB:-aibase}']
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
-    restart: unless-stopped
-    # [没有 ports] 数据库不对外暴露。要连进去调试用
-    #   docker compose exec postgres psql -U aibase -d aibase
-
-  # 一次性初始化容器: 迁移 + 种子,跑完退出。
-  #
-  # 为什么单拎出来而不是让 app 启动时顺手做:
-  #   1. 多实例时每个 app 都跑一遍迁移会并发抢锁
-  #   2. 迁移失败应该是"部署失败",而不是"应用起不来"——语义不同,排查方向也不同
-  #   3. app 容器因此不需要在启动路径上依赖 prisma CLI
   migrate:
     build:
       context: ..
@@ -70,26 +31,18 @@ services:
       app.service: migrate
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aibase}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aibase}
-      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-aibase_prod}
-      # 首次启动建管理员账号。生产务必改掉,或者不设让它随机生成后看日志。
-      # 已有数据的库不想让它碰用户表时设 SKIP_SEED=1
+      DATABASE_URL: ${DATABASE_URL:?在 deploy/.env.prod 设置 DATABASE_URL}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:?在 deploy/.env.prod 设置 DATABASE_SCHEMA}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
       SKIP_SEED: ${SKIP_SEED:-0}
-      # seed 里会 new PrismaClient,而 config 在生产模式下强制要求 JWT_SECRET
-      JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
-    depends_on:
-      postgres:
-        condition: service_healthy
+      JWT_SECRET: ${JWT_SECRET:?在 deploy/.env.prod 设置 JWT_SECRET}
     restart: 'no'
 
   app:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    # 让 docker 注入自己的 init(就是 tini)当 PID 1。
-    # start.sh 最后的 exec 已经保证信号能直达 node,这一行是额外的兜底
-    # (回收僵尸进程)。不用 compose 而是 docker run 时对应 `docker run --init`。
+    # 收养僵尸进程。start.sh 最后的 exec 已保证信号直达 node,这一行是兜底
     init: true
     labels:
       app.project: aibase
@@ -98,25 +51,18 @@ services:
       app.service: app
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aibase}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aibase}
-      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-aibase_prod}
-      # 换掉它 = 强制全员下线,这也是 JWT 方案唯一的全局吊销手段
-      JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
+      DATABASE_URL: ${DATABASE_URL:?在 deploy/.env.prod 设置 DATABASE_URL}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:?在 deploy/.env.prod 设置 DATABASE_SCHEMA}
+      JWT_SECRET: ${JWT_SECRET:?在 deploy/.env.prod 设置 JWT_SECRET}
       JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-604800}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # 容器里不落盘写日志,交给 docker logs / 采集侧。
-      # 在容器里写文件是反模式,除非专门挂了卷
+      # 容器里日志只走 stdout,由平台采集
       LOG_FILE: ''
       CONTEXT_PATH: ${CONTEXT_PATH:-}
     depends_on:
-      postgres:
-        condition: service_healthy
       migrate:
-        # 等 migrate 容器**成功退出**再起。迁移失败则 app 根本不会启动 ——
-        # 这正是我们要的:带着旧 schema 跑起来是更糟的状态
         condition: service_completed_successfully
     restart: unless-stopped
-    # [没有 ports] 只有 nginx 能访问它。对外暴露后端端口等于给自己开了一条绕过 nginx 的路
 
   nginx:
     build:
@@ -128,8 +74,7 @@ services:
       app.env: prod
       app.service: nginx
     ports:
-      # 对外唯一的端口,与开发态后端端口一致 —— 认知上"服务就在 7101",
-      # 不用记 dev 一个号、prod 另一个号
+      # 对外唯一的端口,与开发态后端端口一致,不用记两套号
       - '${APP_PORT:-7101}:7101'
     depends_on:
       - app
@@ -140,10 +85,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-
-volumes:
-  pgdata:
-    labels:
-      app.project: aibase
-      app.title: AIBase
-      app.env: prod

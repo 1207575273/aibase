@@ -1,64 +1,19 @@
-# 测试环境 —— **生产的预演**。
+# 测试环境 = 生产的预演:拓扑与 prod 一致,NODE_ENV 也是 production。
 #
-# 拓扑与 docker-compose.prod.yml **完全一致**(nginx + app + migrate + postgres),
-# 用同样的镜像、同样的启动顺序、同样的健康检查。差别只有:
-#   - 项目名 aibase-test,与生产完全隔离(容器、网络、数据卷都不共用)
 #   - 入口端口 7104(生产是 7101),两套可以同时跑在一台机器上
-#   - 日志级别默认 debug,种子密码固定,方便 QA 反复重置
+#   - 与 prod 的重复是有意的: 测试环境常要临时改东西,独立文件零风险
 #
-# ── 为什么它必须和生产同构 ──────────────────────────────────────
+# 数据库不在这里起 —— 由人配置,连接串写在 deploy/.env.test(不入库,init-project 生成)。必须有的键:
+#   DATABASE_URL     postgresql://用户:密码@主机:5432/库名
+#   DATABASE_SCHEMA  <项目>_test
+#   JWT_SECRET       至少 32 字节
+# 可选: SEED_ADMIN_PASSWORD、SKIP_SEED=1、APP_PORT、LOG_LEVEL、CONTEXT_PATH
 #
-# 测试环境的唯一价值就是"上生产前先跑一遍**一模一样的东西**"。
-# 一旦它和生产有结构差异(少个 nginx、迁移方式不同、应用直连数据库),
-# 那么它验证通过就不能推出生产也会通过 —— 那些差异恰恰是部署事故的高发区。
-#
-# [这不是给单元测试用的] 单元测试和 e2e 连的是开发库(docker-compose.dev.yml),
-#   靠"每个测试文件一个独立 database"隔离,不需要也不该起一整套环境。
-#   本文件是给「部署验证 / QA 验收 / 演示」用的。
-#
-# ── 与 prod 的重复是有意的 ──────────────────────────────────────
-#
-# 两份文件的服务定义几乎一样。按"结构相同就该共用文件 + 多份 .env"的通则,
-# 它们本可以合并 —— 这里**刻意不合并**,因为:
-#   - 测试环境常常要临时改点东西(挂个调试端口、换个镜像 tag、加个 mock 服务),
-#     改在独立文件里不会有任何碰到生产配置的风险
-#   - 一个文件被两个环境共用时,改它必须同时考虑两边,心理负担会让人不敢改
-# 代价是升级拓扑(比如加一个 redis)要改两处 —— 接受这个代价。
-#
-# 用法:
-#   cd deploy
-#   cp .env.compose.example .env.test    # 填 POSTGRES_PASSWORD 与 JWT_SECRET
-#   docker compose -f docker-compose.test.yml --env-file .env.test up -d --build
-
+# 启动(在 deploy/ 目录):
+#   docker compose --env-file .env.test -f docker-compose.test.yml up -d --build
 name: aibase-test
 
 services:
-  postgres:
-    image: postgres:17-alpine
-    # [统一识别标签] 与 dev/prod 同一套固定键,一条过滤器横跨三套栈:
-    #   docker ps -a --filter label=app.project=aibase
-    labels:
-      app.project: aibase
-      app.title: AIBase
-      app.env: test
-      app.service: postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-aibase}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请设置 POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-aibase}
-    volumes:
-      # 独立的卷名,与生产的 pgdata 不是同一个 —— 项目名不同,卷也自然隔离
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-aibase} -d ${POSTGRES_DB:-aibase}']
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
-    restart: unless-stopped
-    # [与生产一致] 数据库不对外暴露端口。要连进去看数据用
-    #   docker compose -f docker-compose.test.yml exec postgres psql -U aibase -d aibase
-
   migrate:
     build:
       context: ..
@@ -71,15 +26,11 @@ services:
       app.service: migrate
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aibase}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aibase}
-      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-aibase_test}
-      # 测试环境的种子密码通常是固定的,方便 QA 反复登录
+      DATABASE_URL: ${DATABASE_URL:?在 deploy/.env.test 设置 DATABASE_URL}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:?在 deploy/.env.test 设置 DATABASE_SCHEMA}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
       SKIP_SEED: ${SKIP_SEED:-0}
-      JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
-    depends_on:
-      postgres:
-        condition: service_healthy
+      JWT_SECRET: ${JWT_SECRET:?在 deploy/.env.test 设置 JWT_SECRET}
     restart: 'no'
 
   app:
@@ -93,21 +44,15 @@ services:
       app.env: test
       app.service: app
     environment:
-      # [与生产一致] NODE_ENV 就是 production ——
-      # 测试环境要验的是生产模式下的行为(JWT_SECRET 强制校验、日志走 JSON 等)。
-      # 设成 development 会让这里验过的东西在生产不成立,那就白验了。
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aibase}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aibase}
-      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-aibase_test}
-      JWT_SECRET: ${JWT_SECRET:?请设置 JWT_SECRET}
+      DATABASE_URL: ${DATABASE_URL:?在 deploy/.env.test 设置 DATABASE_URL}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:?在 deploy/.env.test 设置 DATABASE_SCHEMA}
+      JWT_SECRET: ${JWT_SECRET:?在 deploy/.env.test 设置 JWT_SECRET}
       JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-604800}
-      # 唯一有意与生产不同的一项: 测试环境默认开 debug,排查问题方便
       LOG_LEVEL: ${LOG_LEVEL:-debug}
       LOG_FILE: ''
       CONTEXT_PATH: ${CONTEXT_PATH:-}
     depends_on:
-      postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
@@ -122,8 +67,6 @@ services:
       app.env: test
       app.service: nginx
     ports:
-      # 7104 —— 与生产的 7101 错开,两套环境可以在同一台机器上并存。
-      # 端口连号: 7101 生产入口 / 7102 前端 dev / 7103 开发库 / 7104 测试环境入口
       - '${APP_PORT:-7104}:7101'
     depends_on:
       - app
@@ -134,10 +77,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-
-volumes:
-  pgdata:
-    labels:
-      app.project: aibase
-      app.title: AIBase
-      app.env: test
