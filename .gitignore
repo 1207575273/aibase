@@ -47,8 +47,6 @@ playwright-report/
 *.tsbuildinfo
 .tanstack/
 
-# TanStack Router 自动生成的路由树,每次 vite 启动时重建
-web/src/routeTree.gen.ts
 
 # AI 编码工具的本机配置不入库(权限允许列表等,与机器绑定)。
 # skills 也不入库 —— init-node-project 是**生成这个模板的工具**,
