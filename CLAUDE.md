@@ -53,6 +53,9 @@ React 19 · vite · TanStack Router/Query · Tailwind v4 · shadcn/ui · react-h
 - 时间由注入的 Clock 产生(禁 `@default(now())` / `@updatedAt`),ID 用 UUID v7;存 UTC,按 Asia/Shanghai 展示
 - 业务表必须有 `createdAt/updatedAt/createdBy/updatedBy`,业务表 `createdBy` 非空
 - 数据库由人配置:`DATABASE_URL` + `DATABASE_SCHEMA` 必填,schema 命名 `<项目>_dev` / `_test` / `_prod`
+- **每个模型、每个字段都要有 `///` 注释**(含 id 与审计字段),写业务口径与 Why,不复述字段名;
+  它是表结构说明的唯一真源,`pnpm db migrate` 会把它写进库(COMMENT ON),不手写注释 SQL;
+  库里注释与 schema 不一致时 `tests/db-comments.test.ts` 会失败
 - 改表只用 `pnpm db migrate`,不用 `prisma migrate dev`(要建影子库,沙箱没有建库权限);
   migrate / reset 只许在 `_dev` 上执行,测试 / 生产只用 `pnpm db deploy`;迁移 SQL 不许写死 `"public".`
 - AI 执行 reset 会被 Prisma 拦下,必须向人说明后果并取得明确同意,不许绕过

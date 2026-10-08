@@ -43,19 +43,26 @@ datasource db {
 //  系统域 —— 用户 / 角色 / 权限 / 会话
 // ══════════════════════════════════════════════════════════════
 
+/// 系统用户。登录、授权与审计的主体;停用用 status 表达,不删除
 model User {
+  /// 主键,UUID v7,由应用层 IdGenerator 生成
   id           String  @id
   /// 登录名。唯一,不可修改(它是审计日志里的主体标识,改了历史日志就对不上人)
   username     String  @unique
+  /// 页面上展示的姓名,可随时修改
   displayName  String
   /// PHC 风格哈希串: $scrypt$N=..,r=..,p=..$salt$dk。绝不出现在任何 wire 映射里
   passwordHash String
   /// ACTIVE | DISABLED。值域由 domain 的 USER_STATUSES 约束
   status       String  @default("ACTIVE")
 
+  /// 创建时间(UTC),由应用层 Clock 写入
   createdAt DateTime
+  /// 最后更新时间(UTC),由应用层 Clock 写入
   updatedAt DateTime
+  /// 创建人用户 id;种子创建的初始管理员为空
   createdBy String?
+  /// 最后更新人用户 id
   updatedBy String?
 
   roles    UserRole[]
@@ -64,11 +71,15 @@ model User {
   @@map("sys_user")
 }
 
+/// 角色。权限码的集合,用户通过 sys_user_role 获得角色
 model Role {
+  /// 主键,UUID v7,由应用层 IdGenerator 生成
   id          String  @id
   /// 大写下划线,如 ADMIN / OPERATOR。与权限码(小写冒号)形态不同,读日志时一眼可辨
   code        String  @unique
+  /// 页面上展示的角色名
   name        String
+  /// 角色用途说明
   description String?
   /// true = 绕过一切权限码校验。比通配符权限码更显式、可审计,且允许多个超管角色
   superAdmin  Boolean @default(false)
@@ -77,9 +88,13 @@ model Role {
   /// ALL | SELF。行级数据权限,扩展成部门维度时在这里加值
   dataScope   String  @default("ALL")
 
+  /// 创建时间(UTC),由应用层 Clock 写入
   createdAt DateTime
+  /// 最后更新时间(UTC),由应用层 Clock 写入
   updatedAt DateTime
+  /// 创建人用户 id;种子创建的内置角色为空
   createdBy String?
+  /// 最后更新人用户 id
   updatedBy String?
 
   users       UserRole[]
@@ -94,7 +109,9 @@ model Role {
 ///   role Restrict -> 角色仍被引用时数据库直接拒绝删除,是 ROLE_IN_USE 的竞态兜底
 ///                    (应用层会先 count 给出友好报错,这条是并发下的最后一道防线)
 model UserRole {
+  /// 用户,删用户时关联一并删除
   userId String
+  /// 角色,仍有用户引用时不允许删除角色
   roleId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
@@ -109,7 +126,9 @@ model UserRole {
 /// 本表只存字符串引用。代码删掉某个 code 后,库里的残留行在读取时被 isKnownPermission
 /// 过滤掉即可,零数据迁移。
 model RolePermission {
+  /// 角色,删角色时它的权限码一并删除
   roleId String
+  /// 权限码,小写冒号形式如 user:read;取值以 @app/contracts 的 PERMISSIONS 为准
   code   String
   role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
 

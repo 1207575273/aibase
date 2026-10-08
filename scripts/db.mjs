@@ -20,9 +20,11 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { COMMENTS_QUERY, commentStatements, missingComments, parseSchemaComments, toCommentMap } from './db-comments.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PRISMA_CONFIG = 'server/prisma.config.ts';
@@ -98,16 +100,44 @@ const requireDocker = () => {
 };
 
 /**
+ * 读当前库(DATABASE_SCHEMA)里的表与列注释。
+ * pg 借用 server 包的依赖(Prisma 的 adapter-pg 本来就要它),根目录不为此新增依赖。
+ */
+const readDbComments = async () => {
+  const { Client } = createRequire(resolve(ROOT, 'server/package.json'))('pg');
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    return toCommentMap((await client.query(COMMENTS_QUERY, [process.env.DATABASE_SCHEMA])).rows);
+  } finally {
+    await client.end();
+  }
+};
+
+/**
  * 生成迁移并应用。
  *
  * diff 的对比基准是"当前库的实际结构"。有人绕过迁移手工改过库的话,
  * 这些改动也会被算进新迁移 —— 在 _dev schema 上遇到这种情况,pnpm db reset 重建即可。
+ *
+ * 表 / 字段注释: Prisma 不会把 /// 写进库,这里补上。/// 必须齐全(否则拒绝生成);
+ * 与当前库不一致的注释生成 COMMENT ON 追加进同一个迁移 —— 只改了注释也会生成迁移。
+ * 规则与理由见 scripts/db-comments.mjs,一致性由 server/tests/db-comments.test.ts 守着。
  */
-const migrate = (rest) => {
+const migrate = async (rest) => {
   requireDevSchema('migrate');
   const flag = rest.indexOf('--name');
   const name = toMigrationName(flag >= 0 ? rest[flag + 1] : undefined);
   if (name === null) fail('pnpm db migrate 需要 --name <这次改了什么>,如 pnpm db migrate --name add_order');
+
+  const models = parseSchemaComments(readFileSync(resolve(ROOT, SCHEMA_FILE), 'utf8'));
+  const missing = missingComments(models);
+  if (missing.length > 0) {
+    fail(
+      `${missing.length} 处缺注释,每张表、每个字段都必须有 /// 注释(写业务口径与 Why,不复述字段名):\n` +
+        missing.map((m) => `         - ${m}`).join('\n'),
+    );
+  }
 
   const diff = spawnSync(
     'pnpm',
@@ -116,19 +146,23 @@ const migrate = (rest) => {
   );
   if (diff.error !== undefined) fail(`无法执行 prisma migrate diff: ${diff.error.message}`);
   // --exit-code: 0 = 无差异,2 = 有差异,其他 = 出错
-  if (diff.status === 0) {
-    process.stdout.write('[INFO] schema.prisma 与当前库一致,没有需要生成的迁移。\n');
+  if (diff.status !== 0 && diff.status !== 2) process.exit(diff.status ?? 1);
+  const structural = diff.status === 2 ? diff.stdout : '';
+  const comments = commentStatements(models, await readDbComments());
+  if (structural === '' && comments.length === 0) {
+    process.stdout.write('[INFO] schema.prisma 与当前库一致(结构与注释),没有需要生成的迁移。\n');
     return;
   }
-  if (diff.status !== 2) process.exit(diff.status ?? 1);
 
   const dir = resolve(MIGRATIONS_DIR, migrationDirName(name));
   mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    resolve(dir, 'migration.sql'),
-    `-- ${name}\n-- 由 pnpm db migrate 生成。提交前通读一遍,给表和字段补上业务注释。\n\n${diff.stdout}`,
+  const commentBlock =
+    comments.length > 0 ? `\n-- 表与字段注释: 依 schema.prisma 的 /// 生成,勿手改\n${comments.join('\n')}\n` : '';
+  writeFileSync(resolve(dir, 'migration.sql'), `-- ${name}\n-- 由 pnpm db migrate 生成。提交前通读一遍。\n\n${structural}${commentBlock}`);
+  process.stdout.write(
+    `[PASS] 已生成迁移 ${relative(ROOT, dir).replace(/\\/g, '/')}/migration.sql` +
+      `(结构变更${structural === '' ? '无' : '有'},注释 ${comments.length} 条)\n`,
   );
-  process.stdout.write(`[PASS] 已生成迁移 ${relative(ROOT, dir).replace(/\\/g, '/')}/migration.sql\n`);
   prisma('migrate', 'deploy');
   // prisma migrate dev 会顺带重新生成 Client,diff 流程要自己补上 —— 否则新表在代码里没有类型
   prisma('generate');
@@ -174,5 +208,5 @@ if (isMain) {
   if (handler === undefined) {
     fail(`未知子命令: ${sub ?? '(空)'}\n       用法: pnpm db <${Object.keys(COMMANDS).join(' | ')}> [参数]`);
   }
-  handler(rest);
+  await handler(rest);
 }
