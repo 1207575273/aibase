@@ -41,6 +41,9 @@ coverage/
 .vitest/
 # 浏览器自动化调试产物(快照 yml / 控制台 log / 截图)
 .playwright-mcp/
+.playwright-cli/
+# e2e-project 每次探索的过程证据(截图 / 快照 / trace),用户验收后归档到 e2e/archive/ 才入库
+e2e/.runs/
 test-results/
 playwright-report/
 .tmp/
@@ -49,8 +52,7 @@ playwright-report/
 
 
 # AI 编码工具的本机配置不入库(权限允许列表等,与机器绑定)。
-# skills 也不入库 —— init-node-project 是**生成这个模板的工具**,
-# 不是模板的一部分。它只是恰好放在这里开发,归属在 ~/.claude/skills/。
+# skills(init-project / deploy-project / e2e-project)只在本机,不入库。
 # 模板自己需要的开发指引全在 CLAUDE.md 里,不依赖任何 skill。
 .claude/
 .cursor/

@@ -18,6 +18,7 @@
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "test": "pnpm -r --filter @app/server --filter @app/contracts test",
     "test:e2e": "pnpm --filter @app/e2e test",
+    "test:ui": "pnpm --filter @app/e2e test:ui",
     "verify": "pnpm typecheck && pnpm lint && pnpm build && pnpm test && pnpm test:e2e",
     "db": "node scripts/db.mjs",
     "package": "node scripts/package.mjs",
