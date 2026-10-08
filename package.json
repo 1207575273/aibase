@@ -20,6 +20,7 @@
     "test:e2e": "pnpm --filter @app/e2e test",
     "verify": "pnpm typecheck && pnpm lint && pnpm build && pnpm test && pnpm test:e2e",
     "db": "node scripts/db.mjs",
+    "package": "node scripts/package.mjs",
     "logs": "node scripts/logs.mjs"
   },
   "devDependencies": {
