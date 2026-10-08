@@ -204,8 +204,28 @@ e2e/
 
 - 被测地址先过 `doctor`:不只检查首页,还要求 `/api/health` 返回 ok。
   实际踩过的坑:端口被别的部署占着时,前端照样能打开,但接口全打到了别处。
-- 浏览器版本以 `@playwright/test` 要求的为准(读 playwright-core 的 `browsers.json`),目录里有旧版本不算。
 - 生产环境不做写操作(新增、修改、删除数据),除非用户明确同意。
+
+### 版本锁定(探索与回归必须同一内核)
+
+playwright-cli 与 `@playwright/test` 都是本包(`e2e/package.json`)的开发依赖,**精确锁定且共用同一个 playwright-core**:
+
+| 包 | 版本 |
+|---|---|
+| `@playwright/cli` | `0.1.22` |
+| `@playwright/test` | `1.64.0-alpha-1790635538000`(= playwright-cli 0.1.22 依赖的内核版本) |
+
+- **为什么不用 `@playwright/test` 正式版**: playwright-cli 每个版本依赖的都是 playwright 的 alpha 内核,
+  与正式版要的浏览器版本不同(实测 1247 / 1248)。两套内核混用时,导航和快照正常,点击、输入却会静默失效。
+  锁到同一内核后 pnpm 只装一份 playwright-core,只需要一套浏览器。
+- **e2e-project 只用这里锁定的 playwright-cli**,不用全局安装的;沙箱若内置了版本不同的一份,doctor 会停下来让用户选。
+- **升级规则(两个包一起升)**:
+  1. `npm view @playwright/cli@<新版本> dependencies` 查它依赖的 `playwright-core` 版本号
+  2. `@playwright/cli` 改成新版本,`@playwright/test` 改成第 1 步查到的同一个版本号
+  3. `pnpm install`,`pnpm --filter @app/e2e exec playwright install chromium` 装新内核要的浏览器
+  4. 用 e2e-project 跑一遍探索,再 `pnpm test:ui` 跑回归
+- 浏览器按内核 `browsers.json` 要求的准确版本判断,目录里有别的版本不算;**绝不用软链冒充**。
+- Linux 沙箱常缺中文字体(页面文字成空白方块、浏览器可能崩溃),e2e-project 的 doctor 会检查并按用户同意下载到用户目录。
 
 ---
 

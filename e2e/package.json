@@ -11,7 +11,8 @@
     "test:ui": "playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "1.64.0",
+    "@playwright/cli": "0.1.22",
+    "@playwright/test": "1.64.0-alpha-1790635538000",
     "@types/node": "22.20.1",
     "@types/pg": "8.23.1",
     "pg": "8.23.0",
