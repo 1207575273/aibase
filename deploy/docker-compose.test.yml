@@ -7,7 +7,8 @@
 #   DATABASE_URL     postgresql://用户:密码@主机:5432/库名
 #   DATABASE_SCHEMA  <项目>_test
 #   JWT_SECRET       至少 32 字节
-# 可选: SEED_ADMIN_PASSWORD、SKIP_SEED=1、APP_PORT、LOG_LEVEL、CONTEXT_PATH
+# 必须: SEED_ADMIN_PASSWORD(管理员初始密码)
+# 可选: SKIP_SEED=1、APP_PORT、LOG_LEVEL、CONTEXT_PATH
 #
 # 启动(在 deploy/ 目录):
 #   docker compose --env-file .env.test -f docker-compose.test.yml up -d --build
@@ -28,7 +29,7 @@ services:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL:?在 deploy/.env.test 设置 DATABASE_URL}
       DATABASE_SCHEMA: ${DATABASE_SCHEMA:?在 deploy/.env.test 设置 DATABASE_SCHEMA}
-      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?在 deploy/.env.test 设置 SEED_ADMIN_PASSWORD}
       SKIP_SEED: ${SKIP_SEED:-0}
       JWT_SECRET: ${JWT_SECRET:?在 deploy/.env.test 设置 JWT_SECRET}
     restart: 'no'

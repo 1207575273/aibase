@@ -9,7 +9,8 @@
 #   DATABASE_URL     postgresql://用户:密码@主机:5432/库名
 #   DATABASE_SCHEMA  <项目>_prod
 #   JWT_SECRET       至少 32 字节;换掉它 = 全员重新登录
-# 可选: SEED_ADMIN_PASSWORD(不设则 seed 随机生成并打印一次)、SKIP_SEED=1、APP_PORT、LOG_LEVEL、CONTEXT_PATH
+#   SEED_ADMIN_PASSWORD  管理员初始密码(首次部署灌种子用,没有则停下)
+# 可选: SKIP_SEED=1、APP_PORT、LOG_LEVEL、CONTEXT_PATH
 #
 # 启动(在 deploy/ 目录):
 #   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
@@ -33,7 +34,7 @@ services:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL:?在 deploy/.env.prod 设置 DATABASE_URL}
       DATABASE_SCHEMA: ${DATABASE_SCHEMA:?在 deploy/.env.prod 设置 DATABASE_SCHEMA}
-      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?在 deploy/.env.prod 设置 SEED_ADMIN_PASSWORD}
       SKIP_SEED: ${SKIP_SEED:-0}
       JWT_SECRET: ${JWT_SECRET:?在 deploy/.env.prod 设置 JWT_SECRET}
     restart: 'no'
@@ -42,7 +43,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    # 收养僵尸进程。start.sh 最后的 exec 已保证信号直达 node,这一行是兜底
+    # 收养僵尸进程。Dockerfile 的 exec 形式 CMD 已保证信号直达 node,这一行是兜底
     init: true
     labels:
       app.project: aibase

@@ -12,11 +12,11 @@
  */
 
 import { PERMISSION_CODES } from '@app/contracts';
-import { randomBytes } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import { createPrismaClient } from '../src/platform/db/prisma-client.js';
 import { ScryptPasswordHasher } from '../src/modules/identity/infra/scrypt-password-hasher.js';
 import { config } from '../src/platform/config/index.js';
+import { requireAdminPassword } from './seed-password.js';
 
 const ADMIN_ROLE_CODE = 'ADMIN';
 const VIEWER_ROLE_CODE = 'VIEWER';
@@ -83,12 +83,8 @@ const main = async (): Promise<void> => {
   const existingAdmin = await prisma.user.findUnique({ where: { username: ADMIN_USERNAME } });
 
   if (existingAdmin === null) {
-    // 密码取 SEED_ADMIN_PASSWORD。.env.example 里给了固定值 admin12345,
-    // 方便 clone 下来就能登录。真的一个都没设(比如容器里没挂 .env)时
-    // 随机生成并打印一次,而不是退回某个人尽皆知的默认密码 ——
-    // 那种默认值会一路带到生产环境。
-    const envPassword = process.env['SEED_ADMIN_PASSWORD'];
-    const password = envPassword ?? randomBytes(9).toString('base64url');
+    // 密码只取 SEED_ADMIN_PASSWORD(.env.example 里是 admin12345,clone 下来就能登录),没设就报错停下
+    const password = requireAdminPassword(process.env['SEED_ADMIN_PASSWORD']);
 
     const admin = await prisma.user.create({
       data: {
@@ -110,10 +106,7 @@ const main = async (): Promise<void> => {
         '='.repeat(60),
         '  管理员账号已创建',
         `  用户名: ${ADMIN_USERNAME}`,
-        `  密  码: ${password}`,
-        envPassword === undefined
-          ? '  [WARN] 密码为随机生成,只显示这一次,请立即记录并在登录后修改'
-          : '  [INFO] 密码来自环境变量 SEED_ADMIN_PASSWORD',
+        '  密  码: 见 SEED_ADMIN_PASSWORD',
         '='.repeat(60),
         '',
       ].join('\n'),
