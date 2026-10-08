@@ -14,23 +14,75 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // 端口与 dev.mjs、vite、后端 config 同源 —— 都来自 .env
 import { ports } from './ports.mjs';
 const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
+
+/** /proc/net/tcp 里 LISTEN 状态的编码 */
+const TCP_LISTEN = '0A';
 
 /**
- * Unix 侧找 pid —— lsof 与 ss 都试。
+ * Linux 侧找 pid —— 直接读 /proc,不依赖任何外部命令。
  *
- * [坑] 不能只用 lsof。精简的服务器镜像(debian-slim、alpine、多数容器基础镜像)
- * 默认不装 lsof,而 execFileSync 在"命令不存在"时抛的异常与"没匹配到"
- * 长得一样。只用 lsof 的话,端口明明被占着,`pnpm kill` 却报告没找到进程 ——
- * 失败得完全静默,人会以为端口是干净的,然后对着 EADDRINUSE 一脸茫然。
+ * [为什么] 沙箱 / 精简容器镜像里 lsof、ss、netstat、fuser 可能一个都没有,用户又是非 root、无 sudo,
+ * 装不了 iproute2。/proc 是 ss 自己的数据来源,任何 Linux 都有:
+ *   1. /proc/net/tcp、tcp6 里找本地端口 = port 且状态为 LISTEN 的 socket,取 inode
+ *   2. 遍历 /proc/<pid>/fd/*,链接目标为 socket:[inode] 的进程就是监听者
  *
- * ss 来自 iproute2,现代 Linux 发行版基本都自带,比 lsof 普及得多。
- * 两个都没有时明确抛出,由调用方区分"工具缺失"和"端口空闲"。
+ * [非 root] 只能读自己进程的 fd。端口在监听却找不到属主(别的用户的进程)时明确报错 ——
+ * 静默返回空数组会让人以为端口是干净的,然后对着 EADDRINUSE 一脸茫然。
+ */
+const findPidsLinux = (port) => {
+  const inodes = new Set();
+  for (const file of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let text;
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch {
+      continue; // 内核没开 IPv6 时 tcp6 不存在
+    }
+    for (const line of text.split('\n').slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 10 || cols[3] !== TCP_LISTEN) continue;
+      if (parseInt(cols[1].split(':')[1], 16) === port) inodes.add(cols[9]);
+    }
+  }
+  if (inodes.size === 0) return [];
+
+  const pids = new Set();
+  for (const pid of readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
+    let fds;
+    try {
+      fds = readdirSync(`/proc/${pid}/fd`);
+    } catch {
+      continue; // 别的用户的进程,或已经退出
+    }
+    for (const fd of fds) {
+      try {
+        const m = /^socket:\[(\d+)\]$/.exec(readlinkSync(`/proc/${pid}/fd/${fd}`));
+        if (m && inodes.has(m[1])) pids.add(pid);
+      } catch {
+        // fd 在遍历过程中关闭了
+      }
+    }
+  }
+  if (pids.size === 0) {
+    process.stderr.write(`[FAIL] 端口 ${port} 正在被监听,但找不到属主进程(可能属于其他用户)。换一个端口段,或请有权限的人处理\n`);
+    process.exit(1);
+  }
+  return [...pids];
+};
+
+/**
+ * macOS 等非 Linux 的 Unix 侧找 pid —— lsof 与 ss 都试(没有 /proc)。
+ *
+ * [坑] execFileSync 在"命令不存在"时抛的异常与"没匹配到"长得一样,
+ * 必须看退出码区分,两个都没有时明确报错,不能静默当作端口空闲。
  */
 const findPidsUnix = (port) => {
   try {
@@ -56,6 +108,7 @@ const findPidsUnix = (port) => {
 
 /** 找出监听指定端口的进程 pid。 */
 export const findPids = (port) => {
+  if (isLinux) return findPidsLinux(port);
   if (!isWindows) return findPidsUnix(port);
   try {
     const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
@@ -92,7 +145,8 @@ export const killPid = (pid, { force = true } = {}) => {
       // 对控制台程序基本等于没发,所以这里非 force 也只能尽力而为。
       execFileSync('taskkill', ['/pid', pid, '/T', ...(force ? ['/F'] : [])], { stdio: 'ignore' });
     } else {
-      execFileSync('kill', [force ? '-9' : '-15', pid], { stdio: 'ignore' });
+      // 用 process.kill 而不是外部 kill 命令: 精简镜像里 /bin/kill(procps)不一定有
+      process.kill(Number(pid), force ? 'SIGKILL' : 'SIGTERM');
     }
     return true;
   } catch {
