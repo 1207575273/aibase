@@ -98,10 +98,9 @@ COPY --from=build /app/server/prisma ./server/prisma
 # (向上找第一个含它的目录),删了会让所有相对路径解析错位
 COPY package.json pnpm-workspace.yaml ./
 COPY server/prisma.config.ts ./server/prisma.config.ts
-COPY deploy/start.sh ./start.sh
 COPY deploy/start-migrate.sh ./start-migrate.sh
 # 显式加执行位: 构建 context 来自 Windows 时文件权限不可靠,不能赌 COPY 进来的恰好可执行
-RUN chmod +x ./start.sh ./start-migrate.sh
+RUN chmod +x ./start-migrate.sh
 
 # 用非 root 跑。node 镜像自带 node 用户(uid 1000)
 RUN chown -R node:node /app
@@ -127,11 +126,10 @@ EXPOSE ${APP_PORT}
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "const r=process.env.CONTEXT_PATH||'';const c=(r===''||r==='/')?'':(r.startsWith('/')?r:'/'+r).replace(/\/+$/,'');fetch('http://127.0.0.1:'+(process.env.PORT||7101)+c+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# 默认入口是 start.sh(只启动应用)。migrate 服务在 compose 里用
+# 默认入口直接启动应用,不跑迁移。migrate 服务在 compose 里用
 # `command: ["./start-migrate.sh"]` 覆盖成迁移+种子那条路 —— 同一个镜像两个入口。
-# 两个脚本各自有完整注释。
 #
-# [关键] 必须用 exec 形式(JSON 数组)。写成 `CMD ./start.sh` 会被 docker
-# 包一层 `/bin/sh -c`,PID 1 就成了那个 sh —— 它收到 SIGTERM 不转发给子进程,
-# start.sh 里的 exec 也就白写了,优雅关闭仍然不会执行。
-CMD ["./start.sh"]
+# [关键] 必须用 exec 形式(JSON 数组):node 直接成为 PID 1,收到 SIGTERM 就执行优雅关闭。
+# 写成 `CMD node ...` 会被 docker 包一层 `/bin/sh -c`,PID 1 变成那个 sh,
+# 它不转发信号,优雅关闭不会执行,最后几条日志会丢。
+CMD ["node", "server/dist/main.js"]
