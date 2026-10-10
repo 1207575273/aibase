@@ -1,17 +1,16 @@
 ---
 name: init-project
-description: 下载模板归档包(aibase:Hono + Prisma + PostgreSQL + React,认证与 RBAC 已就位)初始化一个新项目。会询问项目名、端口段、开发库(必填)以及测试库 / 生产库(选填但会提示),然后下载模板、在本地 git init 独立仓库、改名、写配置、建表、跑全量验证。当用户说「新建项目」「初始化项目」「基于模板起一个项目」「起一个新服务」时使用。
+description: 用 skill 自带的模板源码包(aibase:Hono + Prisma + PostgreSQL + React,认证与 RBAC 已就位)初始化一个新项目。会询问项目名、端口段、开发库(必填)以及测试库 / 生产库(选填但会提示),然后解包模板、在本地 git init 独立仓库、改名、写配置、建表、跑全量验证。当用户说「新建项目」「初始化项目」「基于模板起一个项目」「起一个新服务」时使用。
 ---
 
 # init-project:项目初始化
 
-模板来源在 `config.mjs` 的 `template`:公司 GitLab 地址、项目路径、**只读**访问令牌(每个字段都有注释)。
-换来源只改这一处;临时用别的公开归档包地址传 `--template`(不带令牌)。
-令牌只放在请求头里,不进 URL、日志与 `projects.json`;**不要在回复里展示令牌**。
-
-**只下载归档包,不 git clone**:解包后在本地 `git init` 一个全新的独立仓库,没有远端、没有模板的提交历史,
+模板源码在本 skill 的 `assets/template.tar.gz`(`git archive` 打出,不含 .git 与被忽略的文件,包头记录模板提交号),
+**不联网、不 git clone**:解包后在本地 `git init` 一个全新的独立仓库,没有远端、没有模板的提交历史,
 业务代码不可能被推到公共的模板仓库。脚本会在首次提交后校验"没有任何远端",有就中止。
-只依赖 Node 与 git(下载用 node:http,解包用纯 Node),沙箱里没有 curl / tar 也能用。
+只依赖 Node 与 git(gzip 用 node:zlib,tar 用纯 Node 解包),沙箱里没有 tar 也能用。
+
+模板更新后,在模板仓库提交,再运行 `node scripts/pack.mjs` 重新生成源码包并随 skill 一起提交(只打已提交的内容)。
 
 所有改动由 `scripts/init.mjs` 完成。你只负责:问清信息、执行脚本、读懂失败原因、交付。
 
@@ -55,7 +54,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/init.mjs" \
 - 方括号里的是选填项:用户没给就**不传**,脚本会用默认值或在结束时提示补配
 - 开发库用户选了本机起库时,把 `--dev-db-url` 换成 `--dev-db-local`
 
-脚本步骤:环境预检 -> 下载并解包模板 -> 改名与端口 -> 首次提交 -> 写入目标目录 -> 环境配置 -> 装依赖 ->
+脚本步骤:环境预检 -> 解包模板 -> 改名与端口 -> 首次提交 -> 写入目标目录 -> 环境配置 -> 装依赖 ->
 (本机库)-> 建表与种子 -> `pnpm verify`。每步打印 `[PASS]`,失败打印 `[FAIL]` 并以退出码 1 中止。
 全量验证需要几分钟,不要中途打断。
 
@@ -81,12 +80,12 @@ node "${CLAUDE_SKILL_DIR}/scripts/init.mjs" --list
 
 | 失败在 | 目标目录状态 | 怎么办 |
 |---|---|---|
-| 预检 / 下载模板 / 改名 / 首次提交 | 不存在(在临时目录里做) | 修掉原因直接重跑 |
+| 预检 / 解包模板 / 改名 / 首次提交 | 不存在(在临时目录里做) | 修掉原因直接重跑 |
 | 写入目标目录之后(装依赖 / 建表 / 验证) | 代码完整,只是未验证 | 进目录续跑:`pnpm install && pnpm db deploy && pnpm db seed && pnpm verify` |
 
 | 报错 | 处理 |
 |---|---|
-| 下载模板失败 | HTTP 401 / 404: 令牌失效或被撤销,让用户在项目 Settings -> Access Tokens 重建只读令牌(read_api)后改 `config.mjs`;连不上: 检查网络能否访问 `config.mjs` 里的 GitLab;也可用 `--template <公开的归档包地址>` |
+| 缺少模板源码包 | skill 上传不完整,**停下**交给用户:在模板仓库运行 `scripts/pack.mjs` 后重新上传 skill |
 | 端口段被占用 | 重新 `--check-ports`,换一个段 |
 | 改名不完整,模板可能已变更 | **停下**,把报错原样交给用户。绝不改脚本正则绕过 |
 | `--dev-db-local` 需要 docker | 沙箱里没有 docker,改用 `--dev-db-url` |

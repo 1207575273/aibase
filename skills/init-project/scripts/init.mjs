@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * init-project —— 下载模板归档包初始化一个新项目(不 clone,新项目没有任何远端)。零依赖,只需 Node >= 22.12 与 git。
+ * init-project —— 用 skill 自带的模板源码包(assets/template.tar.gz)初始化一个新项目。零依赖,只需 Node >= 22.12 与 git。
+ * 源码包由 pack.mjs 从模板仓库打出,不联网、不 clone,新项目没有任何远端。
  *
  * 用法:
  *   node init.mjs --check-ports
@@ -12,9 +13,9 @@
  *   node init.mjs --name order-system --dir <绝对路径> --segment 72 \
  *       (--dev-db-url <连接串> | --dev-db-local) \
  *       [--title 订单系统] [--test-db-url <连接串>] [--prod-db-url <连接串>] \
- *       [--admin-password <密码>] [--template <归档包地址,可含 {ref}>] [--ref <分支或 tag>] [--skip-verify]
+ *       [--admin-password <密码>] [--skip-verify]
  *
- * 失败安全: 下载模板、改名、首次提交都在临时目录完成,成功后才写入目标目录。
+ * 失败安全: 解包模板、改名、首次提交都在临时目录完成,成功后才写入目标目录。
  * 写入目标目录之后的步骤(装依赖 / 建表 / 验证)失败时,代码已经完整,进目录续跑即可。
  */
 
@@ -58,47 +59,19 @@ const runVisible = (cmd, args, cwd, what) => {
   if (r.status !== 0) fail(`${what}失败(exit=${r.status})。代码已在 ${cwd},修好原因后进目录续跑,不要重新初始化`);
 };
 
-// ============================================================ 模板下载与解包
+// ============================================================ 模板解包
 //
-// 只下载归档包,不用 git clone: 新项目与模板仓库没有任何关联(没有远端、没有历史),不可能误推到模板仓库。
-// 只依赖 Node 与 git: 沙箱镜像里不一定有 curl / tar / unzip。
-// 下载用 node:http 而不是 fetch —— fetch(undici)会强制附加 sec-fetch-mode 等浏览器请求头,GitLab 归档接口直接回 406。
+// 模板是 skill 自带的源码包,不用 git clone: 新项目与模板仓库没有任何关联(没有远端、没有历史),不可能误推到模板仓库。
+// 只依赖 Node 与 git: gzip 用 node:zlib,tar 用纯 Node 解包,沙箱镜像里有没有 tar 都不影响。
 
-const DOWNLOAD_TIMEOUT_MS = 60_000;
-const MAX_REDIRECTS = 5;
-
-/**
- * 下载为 Buffer,跟随重定向;非 200 报错。
- * headers 用来带访问令牌;重定向到其他主机时不再携带(防止令牌被转发出去)。
- */
-const download = async (url, headers = {}, redirects = 0) => {
-  const { request } = await import(url.startsWith('https:') ? 'node:https' : 'node:http');
-  return new Promise((resolve, reject) => {
-    const req = request(url, { timeout: DOWNLOAD_TIMEOUT_MS, headers }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        if (redirects >= MAX_REDIRECTS) return reject(new Error(`重定向超过 ${MAX_REDIRECTS} 次`));
-        const next = new URL(res.headers.location, url);
-        const sameHost = next.host === new URL(url).host;
-        return resolve(download(next.toString(), sameHost ? headers : {}, redirects + 1));
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`HTTP ${res.statusCode}`));
-      }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c)).on('end', () => resolve(Buffer.concat(chunks))).on('error', reject);
-    });
-    req.on('timeout', () => req.destroy(new Error(`超过 ${DOWNLOAD_TIMEOUT_MS / 1000} 秒未完成`))).on('error', reject).end();
-  });
-};
+const TEMPLATE_ASSET = path.join(SKILL_ROOT, 'assets', 'template.tar.gz');
 
 const TAR_BLOCK = 512;
 const tarString = (buf, start, len) => buf.subarray(start, start + len).toString('utf8').replace(/\0.*$/s, '');
 const tarOctal = (buf, start, len) => parseInt(tarString(buf, start, len).trim() || '0', 8);
 
 /**
- * 解包 tar(ustar + pax,即 git archive 的格式)到 dest,去掉第一层目录(aibase-main/)。
+ * 解包 tar(ustar + pax,即 git archive 的格式)到 dest,去掉第一层目录(pack.mjs 打的 template/)。
  * 支持普通文件、目录、软链接与 pax 长路径;保留可执行位(*.sh)。
  */
 const untar = (tar, dest) => {
@@ -143,22 +116,6 @@ const untar = (tar, dest) => {
 const tarCommit = (tar) => {
   const r = spawnSync('git', ['get-tar-commit-id'], { input: tar.subarray(0, TAR_BLOCK * 4), encoding: 'utf8' });
   return r.status === 0 && /^[0-9a-f]{40}$/.test(r.stdout.trim()) ? r.stdout.trim() : null;
-};
-
-/**
- * config.mjs 的 template: 模板仓库所在 GitLab、项目路径、只读访问令牌(Project Access Token,read_api)。
- * 下载走 GitLab 的仓库归档接口(git archive 生成,带提交号);令牌放请求头,不进 URL、日志与登记文件。
- */
-const templateSources = () => {
-  const t = CONFIG.template;
-  if (!t?.gitlab || !t?.project) return [];
-  return [
-    {
-      name: `GitLab ${t.project}`,
-      archive: `${t.gitlab.replace(/\/+$/, '')}/api/v4/projects/${encodeURIComponent(t.project)}/repository/archive.tar.gz?sha={ref}`,
-      headers: t.token ? { 'PRIVATE-TOKEN': t.token } : {},
-    },
-  ];
 };
 
 // ============================================================ 参数
@@ -322,9 +279,6 @@ const validate = (a) => {
     testDbUrl: a['test-db-url'],
     prodDbUrl: a['prod-db-url'],
     adminPassword: a['admin-password'] ?? 'admin12345',
-    // --template 临时指定一个公开的归档包地址(不带令牌),否则用 config.mjs 的 template
-    sources: a.template ? [{ name: '--template', archive: a.template }] : templateSources(),
-    ref: a.ref ?? CONFIG.templateRef,
     skipVerify: Boolean(a['skip-verify']),
   };
 };
@@ -468,7 +422,8 @@ const main = async () => {
   if (o.devDbLocal && run('docker', ['version', '--format', '{{.Server.Version}}']).status !== 0) {
     fail('--dev-db-local 需要能运行 docker(沙箱 / 容器里不可用),改用 --dev-db-url 填现成的 PG');
   }
-  if (o.sources.length === 0) fail('没有模板来源: config.mjs 的 template(gitlab / project)未配置,也没有传 --template');
+  if (!fs.existsSync(TEMPLATE_ASSET)) fail(`缺少模板源码包 ${TEMPLATE_ASSET}: skill 不完整,在模板仓库里运行 scripts/pack.mjs 生成`);
+  pass('模板源码包 assets/template.tar.gz');
   const busy = await busyPortsOf(o.segment);
   if (busy.length > 0) fail(`端口段 ${o.segment} 有端口被占用: ${busy.join(', ')}。用 --check-ports 换一个段`);
   pass(`端口段 ${o.segment} 空闲(${portsOf(o.segment).join(' / ')})`);
@@ -477,33 +432,15 @@ const main = async () => {
   if (!gitName || !gitEmail) fail('git 未配置 user.name / user.email,首次提交需要它们');
   pass(`提交身份 ${gitName} <${gitEmail}>`);
 
-  step('下载模板');
+  step('解包模板');
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'init-project-'));
   const src = path.join(work, 'src');
-  // 来源来自 config.mjs 的 template(或 --template);令牌只在请求头里,不进 URL、日志与登记文件
-  let tar;
-  let used;
-  const errors = [];
-  for (const source of o.sources) {
-    const url = source.archive.replaceAll('{ref}', encodeURIComponent(o.ref));
-    try {
-      tar = zlib.gunzipSync(await download(url, source.headers ?? {}));
-      used = { name: source.name, url };
-      break;
-    } catch (e) {
-      errors.push(`${source.name}: ${e.message}`);
-      warn(`${source.name} 下载失败(${e.message}),尝试下一个来源`);
-    }
-  }
-  if (!used) {
-    fail(`所有模板来源都下载失败:\n    ${errors.join('\n    ')}\n    检查网络与令牌是否有效,或用 --template <归档包地址> 指定`);
-  }
-  pass(`来源 ${used.name}: ${used.url}`);
+  const tar = zlib.gunzipSync(fs.readFileSync(TEMPLATE_ASSET));
   const files = untar(tar, src);
-  if (files === 0) fail('归档包里没有文件,检查模板地址与分支');
+  if (files === 0) fail('模板源码包里没有文件,在模板仓库里重新运行 scripts/pack.mjs');
   const fullSha = tarCommit(tar);
   const sha = fullSha ? fullSha.slice(0, 7) : 'unknown';
-  pass(`模板版本 ${o.ref}@${sha},${files} 个文件`);
+  pass(`模板版本 ${sha},${files} 个文件`);
 
   step('改名与端口');
   const removed = stripTemplateOnly(src);
@@ -517,7 +454,7 @@ const main = async () => {
   for (const [cmd, a] of [
     ['git', ['init', '-q', '-b', 'main']],
     ['git', ['add', '-A']],
-    ['git', ['commit', '-q', '-m', `chore: 从 ${CONFIG.templateName} 模板初始化(${o.ref}@${sha})`]],
+    ['git', ['commit', '-q', '-m', `chore: 从 ${CONFIG.templateName} 模板初始化(${sha})`]],
   ]) {
     const r = run(cmd, a, { cwd: src });
     if (r.status !== 0) fail(`${cmd} ${a.join(' ')} 失败: ${r.stderr.trim()}`);
@@ -570,7 +507,7 @@ const main = async () => {
       test: stageRecord('test', o.testDbUrl),
       prod: stageRecord('prod', o.prodDbUrl),
     },
-    template: { source: used.name, archive: used.url, ref: o.ref, commit: fullSha ?? sha },
+    template: { archive: 'assets/template.tar.gz', commit: fullSha ?? sha },
     createdAt: new Date().toISOString(),
     status: 'initializing',
   });
