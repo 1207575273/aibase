@@ -18,7 +18,7 @@ init-project -> model-project -> AI 写代码 -> e2e-project -> deploy-project
 
 ## 放在哪里
 
-- 本机开发 aibase 本身: 就在 `aibase/.claude/skills/`
+- 本机开发 aibase 本身: 就在 `ts-nodejs-template/.claude/skills/`
 - 沙箱 / 其他机器: 放到 `~/.claude/skills/`(init-project 要在项目存在之前运行,所以放全局)
 
 ## 约定
