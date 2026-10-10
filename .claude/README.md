@@ -1,6 +1,6 @@
 # aibase 配套 skill
 
-与 aibase 模板(公司 GitLab `mk-group/v5/saasservice/ts-asset/ts-nodejs-template`)配套的 4 个 Claude Code skill,
+与模板同仓库维护(公司 GitLab `mk-group/v5/saasservice/ts-asset/ts-nodejs-template` 的 `.claude/`)的 4 个 Claude Code skill,
 覆盖一个项目从创建到上线的 AI 开发闭环:
 
 ```
@@ -19,10 +19,11 @@ init-project -> model-project -> AI 写代码 -> e2e-project -> deploy-project
 ## 放在哪里
 
 - 本机开发 aibase 本身: 就在 `ts-nodejs-template/.claude/skills/`
-- 沙箱 / 其他机器: 放到 `~/.claude/skills/`(init-project 要在项目存在之前运行,所以放全局)
+- 沙箱 / 其他机器: 由生产平台登记为内容 skill(init-project 要在项目存在之前运行,所以不随项目走)
+- init 打的模板源码包**不含** `.claude/`: 新项目里没有这些 skill
 
 ## 约定
 
 - 每个 skill 的结构: `SKILL.md`(流程)、`LESSONS.md`(踩坑记录: 现象 -> 原因 -> 处理)、`scripts/`、`tmp/`(AI 处理现场问题的临时脚本,不入库)
 - 运行时登记文件(`projects.json`、`deployments.json`)只在本机,不入库,不含任何密码
-- 模板更新后在模板仓库提交,再运行 `node skills/init-project/scripts/pack.mjs` 重新生成源码包,与 skill 一起提交
+- 模板更新后先提交,再运行 `node .claude/skills/init-project/scripts/pack.mjs` 重新生成源码包,再提交一次

@@ -10,7 +10,7 @@ description: 用 skill 自带的模板源码包(aibase:Hono + Prisma + PostgreSQ
 业务代码不可能被推到公共的模板仓库。脚本会在首次提交后校验"没有任何远端",有就中止。
 只依赖 Node 与 git(gzip 用 node:zlib,tar 用纯 Node 解包),沙箱里没有 tar 也能用。
 
-模板更新后,在模板仓库提交,再运行 `node scripts/pack.mjs` 重新生成源码包并随 skill 一起提交(只打已提交的内容)。
+模板更新后,在模板仓库提交,再运行 `node scripts/pack.mjs` 重新生成源码包并提交(只打已提交的内容,不含 `.claude/`)。
 
 所有改动由 `scripts/init.mjs` 完成。你只负责:问清信息、执行脚本、读懂失败原因、交付。
 

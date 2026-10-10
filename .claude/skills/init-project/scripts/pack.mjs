@@ -8,6 +8,7 @@
  * --from 默认是本 skill 所在的模板仓库(<仓库>/.claude/skills/init-project)。
  *
  * 用 git archive 打包: 只含已提交的文件,不含 .git、node_modules、.env 等被忽略的内容;
+ * 也不含 .claude/(skill 与模板同仓库维护,但 skill 由平台单独登记,新项目里不带);
  * 包头里记录提交号(init.mjs 读出来写进首次提交信息与 projects.json,便于追溯模板版本)。
  */
 
@@ -20,6 +21,8 @@ const SKILL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const ASSET = path.join(SKILL_ROOT, 'assets', 'template.tar.gz');
 // init.mjs 解包时去掉第一层目录,这里必须带一层
 const PREFIX = 'template/';
+// 不进源码包的目录
+const EXCLUDE = ['.claude'];
 
 const fail = (msg) => {
   process.stderr.write(`[FAIL] ${msg}\n`);
@@ -43,7 +46,7 @@ const dirty = git(from, ['status', '--porcelain']).stdout.trim();
 if (ref === 'HEAD' && dirty) process.stdout.write(`[WARN] 工作区有未提交的改动,不会进包:\n${dirty}\n`);
 
 fs.mkdirSync(path.dirname(ASSET), { recursive: true });
-const r = git(from, ['archive', '--format=tar.gz', `--prefix=${PREFIX}`, '-o', ASSET, sha]);
+const r = git(from, ['archive', '--format=tar.gz', `--prefix=${PREFIX}`, '-o', ASSET, sha, '--', '.', ...EXCLUDE.map((dir) => `:(exclude)${dir}`)]);
 if (r.status !== 0) fail(`git archive 失败: ${r.stderr.trim()}`);
 
 const kb = (fs.statSync(ASSET).size / 1024).toFixed(0);
