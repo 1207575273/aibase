@@ -5,7 +5,7 @@
  * 定位是兜底: 开发库优先用容器外现成的 PG;没有、又不能跑 docker(如沙箱)时才用它。
  *
  * 为什么这样做:
- *   - 不进项目依赖与 lockfile: 二进制约 30MB 且分平台,只有选了这种方式的项目才在 .devdb/ 里单独 npm 安装;
+ *   - 不进项目依赖与 lockfile: 二进制约 60MB(Linux,Windows 约 100MB)且分平台,只有选了这种方式的项目才在 .devdb/ 里单独 npm 安装;
  *   - 版本跟 17.x 走(与生产 PG 17 同大版本),不钉死小版本: 安装时取 npm 上 17.x 的最新一版;
  *   - 不用包自带的 start(): 它在 Node 进程退出时会把库一起关掉。直接用包里的 pg_ctl 后台启动;
  *   - 数据在 .devdb/data: 沙箱里项目目录在持久卷上,沙箱重建后数据还在;进程不在,重启后 pnpm db up 拉起;
@@ -31,7 +31,8 @@ const paths = (root) => {
     dir,
     data: join(dir, 'data'),
     log: join(dir, 'postgres.log'),
-    bin: join(dir, 'node_modules', '@embedded-postgres', `${process.platform}-${process.arch}`, 'native', 'bin'),
+    // 平台包名: linux-x64 / darwin-arm64 / windows-x64(Windows 叫 windows,不是 Node 的 win32)
+    bin: join(dir, 'node_modules', '@embedded-postgres', `${isWindows ? 'windows' : process.platform}-${process.arch}`, 'native', 'bin'),
   };
 };
 
@@ -116,7 +117,11 @@ export const upEmbedded = async (root, { init = false } = {}) => {
   if (isRunning(p)) {
     process.stdout.write(`[PASS] 嵌入式开发库已在运行(127.0.0.1:${t.port})\n`);
   } else {
-    exec(tool(p, 'pg_ctl'), ['start', '-D', p.data, '-l', p.log, '-w', '-o', `-p ${t.port} -h 127.0.0.1`], `启动嵌入式开发库(日志 ${p.log})`);
+    // [坑] 不接管输出: 后台的 postgres 会继承输出管道,管道不关 spawnSync 就一直不返回(Windows 实测);输出本来就写在 -l 日志里
+    const started = spawnSync(tool(p, 'pg_ctl'), ['start', '-D', p.data, '-l', p.log, '-w', '-o', `-p ${t.port} -h 127.0.0.1`], {
+      stdio: 'ignore',
+    });
+    if (started.status !== 0) fail(`启动嵌入式开发库失败(exit=${started.status}),看日志 ${p.log}`);
     process.stdout.write(`[PASS] 嵌入式开发库已启动(127.0.0.1:${t.port},数据 .devdb/data)\n`);
   }
   await ensureDatabase(root, t);

@@ -30,7 +30,7 @@ pnpm db deploy && pnpm db seed
 
 ```bash
 pnpm db up              # 能跑 docker 的机器: 用 docker 起开发库(7103)
-pnpm db up --embedded   # 不能跑 docker(如沙箱): 在 .devdb/ 起嵌入式 PG 17.x,首次会下载约 30MB 二进制
+pnpm db up --embedded   # 不能跑 docker(如沙箱): 在 .devdb/ 起嵌入式 PG 17.x,首次会下载约 60MB 二进制
 pnpm db down            # 停(两种方式通用)
 ```
 
