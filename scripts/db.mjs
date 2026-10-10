@@ -10,7 +10,8 @@
  *   reset                [仅 _dev schema] 清空当前 schema、重跑全部迁移并灌种子
  *   status               查看迁移应用情况
  *   generate / studio    透传给 prisma
- *   up / down            [可选] 用 docker 起停本机开发库。沙箱(容器)里不可用
+ *   up / down            [可选] 起停本机开发库: 项目有 .devdb/ 时起停嵌入式库(见 db-embedded.mjs),否则用 docker
+ *   up --embedded        [可选] 初始化并启动嵌入式开发库(没有外部 PG、也不能跑 docker 时的兜底,沙箱可用)
  *
  * 这个文件把 Prisma 的细节都收在这里,使用者不用关心:
  *   - prisma.config.ts 在 server/ 下,每条命令自动带 --config;
@@ -24,6 +25,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { downEmbedded, upEmbedded, usesEmbedded } from './db-embedded.mjs';
 import { COMMENTS_QUERY, commentStatements, missingComments, parseSchemaComments, toCommentMap } from './db-comments.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -95,7 +97,7 @@ const requireDocker = () => {
   if (probe.error === undefined && probe.status === 0) return;
   fail(
     '当前环境不能启动容器(没有 docker,或身处沙箱 / 容器内)。\n' +
-      '       请在 .env 里把 DATABASE_URL 配成可用的 PG(沙箱里由平台提供)。',
+      '       请在 .env 里把 DATABASE_URL 配成容器外可用的 PG;没有的话用 pnpm db up --embedded 起嵌入式开发库。',
   );
 };
 
@@ -189,11 +191,21 @@ const COMMANDS = {
   },
   generate: (rest) => prisma('generate', ...rest),
   studio: (rest) => prisma('studio', ...rest),
-  up: () => {
+  up: async (rest) => {
+    if (rest.includes('--embedded') || usesEmbedded(ROOT)) {
+      await upEmbedded(ROOT, { init: rest.includes('--embedded') });
+      return;
+    }
     requireDocker();
     run('docker', ['compose', '-f', DEV_COMPOSE, 'up', '-d', '--wait']);
   },
-  down: () => run('docker', ['compose', '-f', DEV_COMPOSE, 'down']),
+  down: () => {
+    if (usesEmbedded(ROOT)) {
+      downEmbedded(ROOT);
+      return;
+    }
+    run('docker', ['compose', '-f', DEV_COMPOSE, 'down']);
+  },
 };
 
 const isMain = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

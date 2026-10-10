@@ -21,6 +21,7 @@ e2e/       端到端                   deploy/   镜像与 compose              
 ```bash
 pnpm install && cp .env.example .env   # 填 DATABASE_URL / DATABASE_SCHEMA
 pnpm dev / pnpm kill                   # 起停后端 + 前端(不会自动拉起数据库)
+pnpm db up / pnpm db down              # 起停本机开发库(有 .devdb/ 是嵌入式库,沙箱重启后先 up)
 pnpm db migrate --name <改了什么>       # 改完 schema.prisma:生成迁移、应用、重新生成 Client
 pnpm db deploy / pnpm db seed          # 应用迁移 / 灌种子(admin / admin12345)
 pnpm typecheck                         # 每建完一个文件跑一次

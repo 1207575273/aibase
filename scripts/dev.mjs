@@ -101,7 +101,7 @@ const requireDatabaseConfig = () => {
   if (missing.length === 0) return;
   process.stderr.write(
     `\n  [FAIL] 未配置 ${missing.join(' / ')}。在 .env 里填好再启动(见 .env.example 的数据库段)。\n` +
-      '         本机想临时起一个 PG: pnpm db up(仅限能跑 docker 的机器,沙箱里不可用)。\n\n',
+      '         优先用容器外现成的 PG;没有的话 pnpm db up --embedded 起嵌入式开发库(沙箱可用)。\n\n',
   );
   process.exit(1);
 };

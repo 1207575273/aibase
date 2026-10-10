@@ -49,6 +49,7 @@ export default [
       '**/generated/**',
       '**/routeTree.gen.ts',
       'server/prisma/**',
+      '.devdb/**',
     ],
   },
 

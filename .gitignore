@@ -47,6 +47,8 @@ e2e/.runs/
 test-results/
 playwright-report/
 .tmp/
+# 嵌入式开发库(pnpm db up --embedded): 二进制与数据
+.devdb/
 *.tsbuildinfo
 .tanstack/
 

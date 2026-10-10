@@ -26,12 +26,15 @@ pnpm db deploy && pnpm db seed
 **端口连号好记**:7101 生产入口(开发态是后端,同一个号)、7102 前端 dev、7103 本机可选开发库、7104 测试环境入口。
 
 数据库由你在 `.env` 里配置(开发 / 测试 / 生产各一套,schema 按后缀 `<项目>_dev` / `_test` / `_prod` 区分)。
-本机没有 PG 时可以用 docker 临时起一个(沙箱里不可用):
+开发库优先用容器外现成的 PG。没有的话:
 
 ```bash
-pnpm db up      # 起开发库(7103)
-pnpm db down    # 停
+pnpm db up              # 能跑 docker 的机器: 用 docker 起开发库(7103)
+pnpm db up --embedded   # 不能跑 docker(如沙箱): 在 .devdb/ 起嵌入式 PG 17.x,首次会下载约 30MB 二进制
+pnpm db down            # 停(两种方式通用)
 ```
+
+嵌入式开发库的数据在 `.devdb/data`,沙箱重启后进程不在,先 `pnpm db up` 再 `pnpm dev`。
 
 ## 目录
 
