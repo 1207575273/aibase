@@ -16,6 +16,20 @@ E2E="node ${CLAUDE_SKILL_DIR}/scripts/e2e.mjs"
 
 ---
 
+## 推荐版本(建议,非强制)
+
+| 包 | 推荐版本 |
+|---|---|
+| `@playwright/cli` | `0.1.22` |
+| `@playwright/test` | `1.64.0-alpha-1790635538000`(= playwright-cli 0.1.22 依赖的内核) |
+
+- 这一对与沙箱镜像 `ts-nodejs-aibase-sandbox` 预装的 chromium 1247 对应(镜像用环境变量 `PLAYWRIGHT_CORE_VERSION` 声明),
+  用它们就直接使用预装浏览器,不需要下载;aibase 模板默认就是这一对。
+- 项目若因故用了别的版本,也能用,只是要现场下载浏览器;doctor 会给出 `[WARN]` 提示,不拦截。
+- 两个包始终保持同一内核:选 playwright-cli 版本后,用 `npm view @playwright/cli@<版本> dependencies` 查它的
+  `playwright-core`,`@playwright/test` 锁到同一个版本号。
+- **不要用 `npx playwright ...`**:npx 拉最新正式版,内核不同,会去下载另一个版本的浏览器。
+
 ## 第 1 步 环境检查
 
 ```bash

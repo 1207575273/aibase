@@ -236,6 +236,20 @@ const doctor = async () => {
   const projectDir = path.resolve(args['project-dir'] ?? '.');
   const { chosen, testCore } = resolveCli(projectDir);
 
+  // 沙箱镜像(ts-nodejs-aibase-sandbox)用 PLAYWRIGHT_CORE_VERSION 声明预装浏览器对应的内核。
+  // 只做引导: 一致就直接用预装浏览器;不一致只提示(需要现场下载),不拦截,也不要求镜像跟着升级
+  const imageCore = process.env.PLAYWRIGHT_CORE_VERSION;
+  if (!imageCore) {
+    out('[INFO] 当前环境没有声明预装浏览器的内核(PLAYWRIGHT_CORE_VERSION),按项目内核检查浏览器');
+  } else if (imageCore === testCore.version) {
+    out(`[PASS] 项目内核与镜像预装浏览器一致(${imageCore}),直接使用预装浏览器,无需下载`);
+  } else {
+    out(
+      `[WARN] 项目内核 ${testCore.version} 与镜像预装浏览器的内核 ${imageCore} 不一致,需要现场下载约 400MB 浏览器。\n` +
+        `    建议(非强制): 把项目 e2e/package.json 的 @playwright/cli 与 @playwright/test 对齐到内核 ${imageCore}(见 SKILL.md 推荐版本)`,
+    );
+  }
+
   const missing = [];
   const browsersDir =
     process.env.PLAYWRIGHT_BROWSERS_PATH ??
