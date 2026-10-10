@@ -56,7 +56,6 @@ playwright-report/
 # AI 编码工具的本机配置不入库(权限允许列表等,与机器绑定)。
 # skills(init-project / deploy-project / e2e-project)只在本机,不入库。
 # 模板自己需要的开发指引全在 CLAUDE.md 里,不依赖任何 skill。
-.claude/
 .cursor/
 .windsurf/
 .idea/

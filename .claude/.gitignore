@@ -1,0 +1,12 @@
+# 本机的 Claude Code 权限配置,与机器绑定
+settings.local.json
+
+# skill 运行时写的登记文件: 每台机器自己的初始化 / 部署记录,不入库
+skills/*/projects.json
+skills/*/deployments.json
+
+# skill 的临时目录: 只保留目录本身
+skills/*/tmp/*
+!skills/*/tmp/.gitkeep
+
+node_modules/
