@@ -11,7 +11,7 @@
  *       列出 projects.json 里登记过的项目(初始化时的决策记录)。
  *
  *   node init.mjs --name order-system --dir <绝对路径> --segment 72 \
- *       (--dev-db-url <连接串> | --dev-db-local) \
+ *       (--dev-db-url <连接串> | --dev-db-embedded | --dev-db-local) \
  *       [--title 订单系统] [--test-db-url <连接串>] [--prod-db-url <连接串>] \
  *       [--admin-password <密码>] [--skip-verify]
  *
@@ -119,7 +119,13 @@ const tarCommit = (tar) => {
 };
 
 // ============================================================ 参数
-const FLAGS = new Set(['check-ports', 'list', 'dev-db-local', 'skip-verify']);
+const FLAGS = new Set(['check-ports', 'list', 'dev-db-local', 'dev-db-embedded', 'skip-verify']);
+
+/**
+ * 开发库三选一,优先级从上到下: 容器外现成的 PG > 嵌入式 PG(npm 包,沙箱可用)> 本机 docker。
+ * 选哪种由用户决定,脚本只校验"恰好选了一种"。
+ */
+const DEV_DB_MODES = { 'dev-db-url': 'url', 'dev-db-embedded': 'embedded', 'dev-db-local': 'docker' };
 const parseArgs = (argv) => {
   const out = {};
   for (let i = 0; i < argv.length; i += 1) {
@@ -249,8 +255,12 @@ const validate = (a) => {
   const sameDir = registry.find((p) => path.resolve(p.dir) === dir);
   if (sameDir) fail(`目录 ${dir} 已登记给项目 ${sameDir.name}`);
 
-  if (Boolean(a['dev-db-url']) === Boolean(a['dev-db-local'])) {
-    fail('开发库必须二选一: --dev-db-url <连接串>(用现成的 PG)或 --dev-db-local(本机 docker 起一个)');
+  const chosen = Object.keys(DEV_DB_MODES).filter((key) => a[key]);
+  if (chosen.length !== 1) {
+    fail(
+      '开发库必须三选一: --dev-db-url <连接串>(优先,容器外现成的 PG)/ --dev-db-embedded(嵌入式 PG,沙箱可用)/ ' +
+        '--dev-db-local(本机 docker)',
+    );
   }
   for (const key of ['dev-db-url', 'test-db-url', 'prod-db-url']) {
     if (!a[key]) continue;
@@ -275,7 +285,7 @@ const validate = (a) => {
     dir,
     segment,
     devDbUrl: a['dev-db-url'],
-    devDbLocal: Boolean(a['dev-db-local']),
+    devDbMode: DEV_DB_MODES[chosen[0]],
     testDbUrl: a['test-db-url'],
     prodDbUrl: a['prod-db-url'],
     adminPassword: a['admin-password'] ?? 'admin12345',
@@ -419,7 +429,7 @@ const main = async () => {
     if (run(tool, ['--version']).status !== 0) fail(`找不到 ${tool}`);
     pass(`${tool} 可用`);
   }
-  if (o.devDbLocal && run('docker', ['version', '--format', '{{.Server.Version}}']).status !== 0) {
+  if (o.devDbMode === 'docker' && run('docker', ['version', '--format', '{{.Server.Version}}']).status !== 0) {
     fail('--dev-db-local 需要能运行 docker(沙箱 / 容器里不可用),改用 --dev-db-url 填现成的 PG');
   }
   if (!fs.existsSync(TEMPLATE_ASSET)) fail(`缺少模板源码包 ${TEMPLATE_ASSET}: skill 不完整,在模板仓库里运行 scripts/pack.mjs 生成`);
@@ -471,9 +481,13 @@ const main = async () => {
   pass('代码已写入');
 
   step('环境配置');
-  const devUrl = o.devDbLocal
-    ? `postgresql://${o.snake}:${o.snake}_dev_password@127.0.0.1:${o.segment}03/${o.snake}_dev`
-    : o.devDbUrl;
+  // docker 方式的密码写死在 deploy/docker-compose.dev.yml;嵌入式库是首次 up 时按这里的连接串建账号,密码随机
+  const localDbUrl = (password) => `postgresql://${o.snake}:${password}@127.0.0.1:${o.segment}03/${o.snake}_dev`;
+  const devUrl = {
+    url: o.devDbUrl,
+    docker: localDbUrl(`${o.snake}_dev_password`),
+    embedded: localDbUrl(randomBytes(18).toString('base64url')),
+  }[o.devDbMode];
   writeDevEnv(o.dir, o, devUrl);
   pass(`.env: 端口 ${o.segment}01/${o.segment}02,schema ${o.snake}_dev`);
   const pending = [];
@@ -503,7 +517,7 @@ const main = async () => {
       e2e: o.segment * 100 + 1001,
     },
     database: {
-      dev: { ...stageRecord('dev', devUrl), local: o.devDbLocal },
+      dev: { ...stageRecord('dev', devUrl), mode: o.devDbMode },
       test: stageRecord('test', o.testDbUrl),
       prod: stageRecord('prod', o.prodDbUrl),
     },
@@ -516,9 +530,13 @@ const main = async () => {
   step('安装依赖');
   runVisible('pnpm', ['install', '--frozen-lockfile'], o.dir, '安装依赖');
 
-  if (o.devDbLocal) {
+  if (o.devDbMode === 'docker') {
     step(`启动本机开发库(${o.name}-dev-postgres,端口 ${o.segment}03)`);
     runVisible('pnpm', ['db', 'up'], o.dir, '启动本机开发库');
+  }
+  if (o.devDbMode === 'embedded') {
+    step(`启动嵌入式开发库(.devdb/,端口 ${o.segment}03,首次下载约 60MB)`);
+    runVisible('pnpm', ['db', 'up', '--embedded'], o.dir, '启动嵌入式开发库');
   }
 
   step('建表与种子');
@@ -545,6 +563,9 @@ const main = async () => {
       `  开发库    schema ${o.snake}_dev\n` +
       `============================================================\n`,
   );
+  if (o.devDbMode === 'embedded') {
+    info('开发库是嵌入式 PG(数据在 .devdb/data)。沙箱 / 机器重启后进程不在,先 pnpm db up 再 pnpm dev');
+  }
   for (const stage of pending) {
     warn(
       `${stage === 'test' ? '测试' : '生产'}环境数据库未配置。部署前在 deploy/.env.${stage} 写入:\n` +
